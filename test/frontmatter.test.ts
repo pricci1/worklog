@@ -28,4 +28,10 @@ describe("frontmatter mutation", () => {
     expect(rewriteList(text, "covers", ["us-a11111", "us-c33333"]))
       .toContain("covers: [us-a11111, us-c33333]");
   });
+
+  test("preserves block list style when rewriting lists", () => {
+    const text = "---\nid: sl-b22222\nkind: slice\ncovers:\n  - us-a11111\n  - us-c33333\ndepends_on: []\n---\n# Body\n";
+
+    expect(rewriteList(text, "covers", ["us-c33333"])).toBe("---\nid: sl-b22222\nkind: slice\ncovers:\n  - us-c33333\ndepends_on: []\n---\n# Body\n");
+  });
 });

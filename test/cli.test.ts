@@ -162,4 +162,10 @@ describe("ready, blocked, query, and lint", () => {
 
     expect(pkg.bin).toEqual({ wl: "./index.ts" });
   });
+
+  test("binary entrypoint has a Bun shebang", async () => {
+    const index = await readFile(join(import.meta.dir, "..", "index.ts"), "utf8");
+
+    expect(index.startsWith("#!/usr/bin/env bun\n")).toBe(true);
+  });
 });

@@ -96,6 +96,14 @@ export function rewriteList(text: string, key: string, values: readonly string[]
   for (let index = 1; index < parsed.endLine; index += 1) {
     const line = lines[index];
     if (line?.match(new RegExp(`^${key}:`))) {
+      const isBlockList = line.trim() === `${key}:` && lines[index + 1]?.match(/^\s+-\s/);
+      if (isBlockList && values.length > 0) {
+        const indent = /^\s*/.exec(lines[index + 1] ?? "")?.[0] ?? "  ";
+        let end = index + 1;
+        while (end < parsed.endLine && lines[end]?.match(/^\s+-\s/)) end += 1;
+        lines.splice(index + 1, end - index - 1, ...values.map((value) => `${indent}- ${value}`));
+        return lines.join("\n");
+      }
       lines[index] = `${key}: ${array(values)}`;
       return lines.join("\n");
     }
