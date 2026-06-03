@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { chmod, mkdir, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { put, read, run, slice, story, tempRepo } from "./helpers";
 
 describe("CLI creation and read commands", () => {
@@ -37,6 +38,31 @@ describe("CLI creation and read commands", () => {
     expect(ambiguous.code).toBe(1);
     expect(ambiguous.stderr).toContain("Ambiguous");
   });
+
+  test("list applies AND filters and supports JSON output", async () => {
+    const repo = await tempRepo();
+    await put(repo, "us-a11111-story.md", story());
+    await put(repo, "sl-a00001-afk.md", slice("sl-a00001"));
+    await put(repo, "sl-b00002-hitl.md", slice("sl-b00002").replace("mode: AFK", "mode: HITL"));
+
+    const table = await run(repo, ["list", "--kind", "slice", "--mode", "HITL", "--tag", "telegram"]);
+    const json = await run(repo, ["list", "--kind", "slice", "--mode", "AFK", "--json"]);
+
+    expect(table.stdout).toContain("sl-b00002\tslice\topen\tHITL");
+    expect(table.stdout).not.toContain("sl-a00001");
+    expect(JSON.parse(json.stdout).map((item: { id: string }) => item.id)).toEqual(["sl-a00001"]);
+  });
+
+  test("commands resolve WORKLOG_DIR relative to cwd", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "wl-env-"));
+    await mkdir(join(repo, "custom"));
+    await writeFile(join(repo, "custom", "us-a11111-story.md"), story(), "utf8");
+
+    const result = await run(repo, ["query"], { WORKLOG_DIR: "custom" });
+
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)[0]).toMatchObject({ id: "us-a11111" });
+  });
 });
 
 describe("CLI mutation commands", () => {
@@ -63,6 +89,17 @@ describe("CLI mutation commands", () => {
 
     expect((await run(repo, ["link", "sl-a00001", "--depends-on", "sl-a00001"])).code).toBe(1);
     expect((await run(repo, ["link", "sl-a00001", "--depends-on", "sl-b00002"])).code).toBe(1);
+  });
+
+  test("validation errors return exit code 1", async () => {
+    const repo = await tempRepo();
+    await put(repo, "us-a11111-story.md", story());
+    await put(repo, "sl-b22222-demo.md", slice());
+
+    expect((await run(repo, ["new", "story"])).code).toBe(1);
+    expect((await run(repo, ["new", "slice", "--title", "Bad", "--mode", "AFK", "--covers", "us-c33333"])).code).toBe(1);
+    expect((await run(repo, ["status", "us-a11111", "done"])).code).toBe(1);
+    expect((await run(repo, ["mode", "us-a11111", "AFK"])).code).toBe(1);
   });
 });
 
@@ -92,6 +129,16 @@ describe("ready, blocked, query, and lint", () => {
     expect(result.stdout).toBe("jq-output\n");
   });
 
+  test("query with a filter fails clearly when jq is absent", async () => {
+    const repo = await tempRepo();
+    await put(repo, "us-a11111-story.md", story());
+
+    const result = await run(repo, ["query", ".[]"], { PATH: "/tmp/wl-no-jq" });
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("jq not found on PATH");
+  });
+
   test("lint reports duplicate ids, dangling refs, cycles, schema failures, and filename mismatches", async () => {
     const repo = await tempRepo();
     await put(repo, "wrong-name.md", story("us-a11111"));
@@ -108,5 +155,11 @@ describe("ready, blocked, query, and lint", () => {
     expect(result.stderr).toContain("schema violation");
     expect(result.stderr).toContain("covers missing story");
     expect(result.stderr).toContain("depends_on cycle");
+  });
+
+  test("package exposes the wl binary entrypoint", async () => {
+    const pkg = JSON.parse(await readFile(join(import.meta.dir, "..", "package.json"), "utf8"));
+
+    expect(pkg.bin).toEqual({ wl: "./index.ts" });
   });
 });

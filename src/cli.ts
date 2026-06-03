@@ -206,14 +206,17 @@ async function cmdQuery(args: string[], io: IO): Promise<number> {
   const data = json((await loadItems(dir)).map((entry) => entry.item));
   const filter = args.join(" ").trim();
   if (!filter) { io.stdout(data); return 0; }
-  const proc = Bun.spawn(["jq", filter], { stdin: "pipe", stdout: "pipe", stderr: "pipe", env: io.env });
+  const jq = io.env.PATH === undefined ? Bun.which("jq") : Bun.which("jq", { PATH: io.env.PATH });
+  if (!jq) {
+    io.stderr("jq not found on PATH\n");
+    return 1;
+  }
+  const proc = Bun.spawn([jq, filter], { stdin: "pipe", stdout: "pipe", stderr: "pipe", env: io.env });
   proc.stdin.write(data);
   proc.stdin.end();
   io.stdout(await new Response(proc.stdout).text());
   io.stderr(await new Response(proc.stderr).text());
-  const code = await proc.exited;
-  if (code === 127) io.stderr("jq not found on PATH\n");
-  return code;
+  return await proc.exited;
 }
 
 async function cmdLint(io: IO): Promise<number> {
