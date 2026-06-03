@@ -6,6 +6,7 @@ import { slugify } from "./slug";
 import { serializeStory, serializeSlice, rewriteScalar, rewriteList } from "./frontmatter";
 import { loadItems, loadItemsWithIssues, resolveItem, sortItems, unresolvedDependencies, findCycles } from "./items";
 import { Mode, SliceStatus, StoryStatus, type NormalizedItem, type NormalizedSlice } from "./schema";
+import { commandHelp, commandNames, mainHelp, usageLine, VERSION } from "./help";
 
 type IO = { stdout: (text: string) => void; stderr: (text: string) => void; cwd: string; env: Record<string, string | undefined> };
 
@@ -49,6 +50,11 @@ async function cmdInit(io: IO): Promise<number> {
   return 0;
 }
 
+function usageError(io: IO, command: string, message: string): number {
+  io.stderr(`${message}\nUsage: ${usageLine(command)}\nRun \`wl ${command} --help\` for details.\n`);
+  return 1;
+}
+
 async function cmdNew(args: string[], io: IO): Promise<number> {
   const sub = args[0];
   const workDir = workDirOrError(io);
@@ -57,10 +63,7 @@ async function cmdNew(args: string[], io: IO): Promise<number> {
   if (sub === "story") {
     const parsed = parseOptions(args.slice(1), { statement: { type: "string" }, tags: { type: "string" } });
     const statement = String(parsed.values.statement ?? "").trim();
-    if (!statement) {
-      io.stderr("--statement is required\n");
-      return 1;
-    }
+    if (!statement) return usageError(io, "new", "--statement is required and must be non-empty");
     const id = await allocateId("us", workDir);
     await writeText(itemPath(workDir, id, slugify(statement)), serializeStory({ id, statement, tags: parseCsv(stringValue(parsed.values.tags)) }));
     io.stdout(`${id}\n`);
@@ -72,21 +75,19 @@ async function cmdNew(args: string[], io: IO): Promise<number> {
     const mode = Mode.safeParse(parsed.values.mode);
     const covers = parseCsv(stringValue(parsed.values.covers));
     const depends_on = parseCsv(stringValue(parsed.values["depends-on"]));
-    if (!title || !mode.success || covers.length === 0) {
-      io.stderr("--title, --mode AFK|HITL, and --covers are required\n");
-      return 1;
-    }
+    if (!title) return usageError(io, "new", "--title is required and must be non-empty");
+    if (!mode.success) return usageError(io, "new", "--mode must be AFK or HITL");
+    if (covers.length === 0) return usageError(io, "new", "--covers is required and must list at least one story ID");
     const loaded = await loadItems(workDir);
     const byId = new Map(loaded.map((entry) => [entry.item.id, entry.item]));
-    for (const id of covers) if (byId.get(id)?.kind !== "story") { io.stderr(`Unknown story ${id}\n`); return 1; }
-    for (const id of depends_on) if (byId.get(id)?.kind !== "slice") { io.stderr(`Unknown slice ${id}\n`); return 1; }
+    for (const id of covers) if (byId.get(id)?.kind !== "story") { io.stderr(`Unknown story: ${id}\n`); return 1; }
+    for (const id of depends_on) if (byId.get(id)?.kind !== "slice") { io.stderr(`Unknown slice: ${id}\n`); return 1; }
     const id = await allocateId("sl", workDir);
     await writeText(itemPath(workDir, id, slugify(title)), serializeSlice({ id, title, mode: mode.data, covers, depends_on, tags: parseCsv(stringValue(parsed.values.tags)) }));
     io.stdout(`${id}\n`);
     return 0;
   }
-  io.stderr("Usage: wl new story|slice ...\n");
-  return 1;
+  return usageError(io, "new", sub ? `Unknown kind: ${sub} (expected story or slice)` : "Specify story or slice");
 }
 
 async function filteredItems(args: string[], io: IO): Promise<{ items: NormalizedItem[]; json: boolean } | undefined> {
@@ -113,7 +114,7 @@ async function cmdShow(args: string[], io: IO): Promise<number> {
   if (!dir) return 1;
   const parsed = parseOptions(args, { json: { type: "boolean" } });
   const id = parsed.positionals[0];
-  if (!id) { io.stderr("Usage: wl show <id> [--json]\n"); return 1; }
+  if (!id) return usageError(io, "show", "<id> is required");
   const resolved = resolveItem(id, await loadItems(dir));
   if (!resolved) { io.stderr(`Item not found: ${id}\n`); return 1; }
   if ("candidates" in resolved) { io.stderr(`Ambiguous id ${id}: ${resolved.candidates.map((entry) => entry.item.id).join(", ")}\n`); return 1; }
@@ -135,7 +136,7 @@ async function mutateResolved(id: string, io: IO, mutate: (entry: Awaited<Return
 
 async function cmdStatus(args: string[], io: IO): Promise<number> {
   const [id, status] = args;
-  if (!id || !status) { io.stderr("Usage: wl status <id> <status>\n"); return 1; }
+  if (!id || !status) return usageError(io, "status", "<id> and <status> are required");
   return await mutateResolved(id, io, (entry) => {
     const ok = entry.item.kind === "story" ? StoryStatus.safeParse(status).success : SliceStatus.safeParse(status).success;
     if (!ok) { io.stderr(`Invalid status for ${entry.item.kind}: ${status}\n`); return undefined; }
@@ -147,9 +148,9 @@ async function cmdStatus(args: string[], io: IO): Promise<number> {
 
 async function cmdMode(args: string[], io: IO): Promise<number> {
   const [id, mode] = args;
-  if (!id || !mode) { io.stderr("Usage: wl mode <id> AFK|HITL\n"); return 1; }
+  if (!id || !mode) return usageError(io, "mode", "<id> and AFK|HITL are required");
   const parsed = Mode.safeParse(mode);
-  if (!parsed.success) { io.stderr(`Invalid mode: ${mode}\n`); return 1; }
+  if (!parsed.success) return usageError(io, "mode", `Invalid mode: ${mode} (expected AFK or HITL)`);
   return await mutateResolved(id, io, (entry) => {
     if (entry.item.kind !== "slice") { io.stderr("mode applies only to slices\n"); return undefined; }
     const next = rewriteScalar(entry.text, "mode", parsed.data);
@@ -159,15 +160,17 @@ async function cmdMode(args: string[], io: IO): Promise<number> {
 }
 
 async function cmdLink(args: string[], io: IO, link: boolean): Promise<number> {
+  const name = link ? "link" : "unlink";
   const sliceId = args[0];
-  if (!sliceId) { io.stderr(`Usage: wl ${link ? "link" : "unlink"} <slice-id> --covers <us-id> | --depends-on <sl-id>\n`); return 1; }
+  if (!sliceId) return usageError(io, name, "<slice-id> is required");
   const parsed = parseOptions(args.slice(1), { covers: { type: "string" }, "depends-on": { type: "string" } });
   const covers = parsed.values.covers;
   const dependsOn = parsed.values["depends-on"];
   const key = covers ? "covers" : dependsOn ? "depends_on" : undefined;
   const ref = String(covers ?? dependsOn ?? "");
   const dir = workDirOrError(io);
-  if (!dir || !key || !ref) { io.stderr("Provide exactly one of --covers or --depends-on\n"); return 1; }
+  if (!dir) return 1;
+  if (!key || !ref) return usageError(io, name, "Provide exactly one of --covers <us-id> or --depends-on <sl-id>");
   const loaded = await loadItems(dir);
   const target = resolveItem(sliceId, loaded);
   if (!target || "candidates" in target || target.item.kind !== "slice") { io.stderr(`Slice not found: ${sliceId}\n`); return 1; }
@@ -232,15 +235,29 @@ async function cmdEdit(args: string[], io: IO): Promise<number> {
   const dir = workDirOrError(io);
   if (!dir) return 1;
   const id = args[0];
-  if (!id) { io.stderr("Usage: wl edit <id>\n"); return 1; }
+  if (!id) return usageError(io, "edit", "<id> is required");
   const resolved = resolveItem(id, await loadItems(dir));
   if (!resolved || "candidates" in resolved) { io.stderr(`Item not found or ambiguous: ${id}\n`); return 1; }
   return await Bun.spawn([io.env.EDITOR ?? "vi", resolved.path], { stdin: "inherit", stdout: "inherit", stderr: "inherit" }).exited;
 }
 
+function hasHelpFlag(args: readonly string[]): boolean {
+  return args.some((arg) => arg === "--help" || arg === "-h");
+}
+
+function showHelp(io: IO, command: string | undefined): number {
+  const text = command ? commandHelp(command) : undefined;
+  io.stdout(text ?? mainHelp());
+  return 0;
+}
+
 export async function cli(argv = Bun.argv.slice(2), io: IO = defaultIO): Promise<number> {
   try {
+    if (argv.length === 0) return showHelp(io, undefined);
     const [command, ...args] = argv;
+    if (command === "--help" || command === "-h" || command === "help") return showHelp(io, args[0]);
+    if (command === "--version" || command === "-V") { io.stdout(`${VERSION}\n`); return 0; }
+    if (hasHelpFlag(args) && command !== "query") return showHelp(io, command);
     switch (command) {
       case "init": return await cmdInit(io);
       case "new": return await cmdNew(args, io);
@@ -256,7 +273,7 @@ export async function cli(argv = Bun.argv.slice(2), io: IO = defaultIO): Promise
       case "query": return await cmdQuery(args, io);
       case "lint": return await cmdLint(io);
       default:
-        io.stderr("Usage: wl <command>\n");
+        io.stderr(`Unknown command: ${command}\nKnown commands: ${commandNames().join(", ")}\nRun \`wl --help\` for usage.\n`);
         return 1;
     }
   } catch (error) {

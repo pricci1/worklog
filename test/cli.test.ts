@@ -169,3 +169,71 @@ describe("ready, blocked, query, and lint", () => {
     expect(index.startsWith("#!/usr/bin/env bun\n")).toBe(true);
   });
 });
+
+describe("help and version", () => {
+  test("bare invocation prints main help to stdout and exits 0", async () => {
+    const repo = await tempRepo();
+    const result = await run(repo, []);
+    expect(result.code).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("USAGE");
+    expect(result.stdout).toContain("wl <command>");
+    expect(result.stdout).toContain("ITEM KINDS");
+  });
+
+  test("--help, -h, and help all print main help", async () => {
+    const repo = await tempRepo();
+    for (const argv of [["--help"], ["-h"], ["help"]]) {
+      const result = await run(repo, argv);
+      expect(result.code).toBe(0);
+      expect(result.stdout).toContain("COMMANDS");
+    }
+  });
+
+  test("--version and -V print the package version", async () => {
+    const repo = await tempRepo();
+    const pkg = JSON.parse(await readFile(join(import.meta.dir, "..", "package.json"), "utf8"));
+    for (const argv of [["--version"], ["-V"]]) {
+      const result = await run(repo, argv);
+      expect(result.code).toBe(0);
+      expect(result.stdout).toBe(`${pkg.version}\n`);
+    }
+  });
+
+  test("command --help prints command-specific usage", async () => {
+    const repo = await tempRepo();
+    const newHelp = await run(repo, ["new", "--help"]);
+    expect(newHelp.code).toBe(0);
+    expect(newHelp.stdout).toContain("wl new story");
+    expect(newHelp.stdout).toContain("wl new slice");
+    expect(newHelp.stdout).toContain("--mode AFK|HITL");
+
+    const linkHelp = await run(repo, ["help", "link"]);
+    expect(linkHelp.code).toBe(0);
+    expect(linkHelp.stdout).toContain("wl link <slice-id> --covers <us-id>");
+  });
+
+  test("unknown command lists known commands and exits 1", async () => {
+    const repo = await tempRepo();
+    const result = await run(repo, ["frobnicate"]);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("Unknown command: frobnicate");
+    expect(result.stderr).toContain("Known commands:");
+  });
+
+  test("usage errors point to --help", async () => {
+    const repo = await tempRepo();
+    const result = await run(repo, ["new", "story"]);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("--statement is required");
+    expect(result.stderr).toContain("wl new --help");
+  });
+
+  test("query --help is treated as a jq filter, not help (so jq can use -h)", async () => {
+    const repo = await tempRepo();
+    await put(repo, "us-a11111-story.md", story());
+    const result = await run(repo, ["query", "--help"], { PATH: "/tmp/wl-no-jq" });
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("jq not found on PATH");
+  });
+});
