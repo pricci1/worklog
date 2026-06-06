@@ -23,6 +23,7 @@ export const Slice = z.object({
   covers: z.array(StoryId).min(1),
   depends_on: z.array(SliceId).default([]),
   tags: z.array(z.string()).default([]),
+  issue: z.number().int().positive().optional(),
 }).strict();
 
 export const Item = z.discriminatedUnion("kind", [Story, Slice]);

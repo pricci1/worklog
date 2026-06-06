@@ -89,6 +89,16 @@ export function rewriteScalar(text: string, key: string, value: string): string 
   return undefined;
 }
 
+export function upsertScalar(text: string, key: string, value: string): string | undefined {
+  const rewritten = rewriteScalar(text, key, value);
+  if (rewritten) return rewritten;
+  const parsed = parseFrontmatter(text);
+  if (!parsed) return undefined;
+  const lines = text.split("\n");
+  lines.splice(parsed.endLine, 0, `${key}: ${value}`);
+  return lines.join("\n");
+}
+
 export function rewriteList(text: string, key: string, values: readonly string[]): string | undefined {
   const parsed = parseFrontmatter(text);
   if (!parsed) return undefined;

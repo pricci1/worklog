@@ -3,8 +3,9 @@ import { mkdir } from "node:fs/promises";
 import { resolveWorkDir, initWorkDir, writeText } from "./fs";
 import { allocateId, itemPath } from "./ids";
 import { slugify } from "./slug";
-import { serializeStory, serializeSlice, rewriteScalar, rewriteList } from "./frontmatter";
+import { serializeStory, serializeSlice, rewriteScalar, rewriteList, upsertScalar } from "./frontmatter";
 import { loadItems, loadItemsWithIssues, resolveItem, sortItems, unresolvedDependencies, findCycles } from "./items";
+import { apiBase, createIssue, parseRepoSpec, resolveRepo, resolveToken, sliceIssuePayload, updateIssue, type GithubConfig } from "./github";
 import { Mode, SliceStatus, StoryStatus, type NormalizedItem, type NormalizedSlice } from "./schema";
 import { commandHelp, commandNames, mainHelp, usageLine, VERSION } from "./help";
 
@@ -222,6 +223,59 @@ async function cmdQuery(args: string[], io: IO): Promise<number> {
   return await proc.exited;
 }
 
+async function cmdSync(args: string[], io: IO): Promise<number> {
+  const parsed = parseOptions(args, { push: { type: "boolean" }, "dry-run": { type: "boolean" }, repo: { type: "string" } });
+  if (!parsed.values.push) return usageError(io, "sync", "--push is required");
+  const dir = workDirOrError(io);
+  if (!dir) return 1;
+  const { items, issues } = await loadItemsWithIssues(dir);
+  const errors = issues.filter((issue) => !issue.warning);
+  if (errors.length > 0) {
+    for (const issue of errors) io.stderr(`error: ${issue.file}${issue.id ? ` ${issue.id}` : ""}: ${issue.problem}\n`);
+    io.stderr("Fix lint errors before syncing.\n");
+    return 1;
+  }
+  const slices = items.filter((entry): entry is typeof entry & { item: NormalizedSlice } => entry.item.kind === "slice");
+  const dryRun = Boolean(parsed.values["dry-run"]);
+
+  if (dryRun) {
+    for (const { item } of slices) io.stdout(`${item.id} would ${item.issue ? `update #${item.issue}` : "create"}\n`);
+    return 0;
+  }
+
+  const token = await resolveToken(io.env);
+  if (!token) return usageError(io, "sync", "No GitHub token found. Set GITHUB_TOKEN or authenticate with `gh auth login`.");
+  const repoSpec = stringValue(parsed.values.repo);
+  const repo = repoSpec ? parseRepoSpec(repoSpec) : await resolveRepo(io.cwd, io.env);
+  if (!repo) return usageError(io, "sync", "Could not determine GitHub repo. Pass --repo owner/name or set GITHUB_REPOSITORY.");
+  const config: GithubConfig = { apiBase: apiBase(io.env), token, ...repo };
+
+  let failed = 0;
+  for (const { item, path, body } of slices) {
+    const payload = sliceIssuePayload(item, body);
+    try {
+      if (item.issue) {
+        await updateIssue(config, item.issue, payload);
+        io.stdout(`${item.id} updated #${item.issue}\n`);
+      } else {
+        const number = await createIssue(config, payload);
+        const next = upsertScalar(await Bun.file(path).text(), "issue", String(number));
+        if (!next) {
+          io.stderr(`${item.id} created #${number} but failed to write issue field: missing frontmatter\n`);
+          failed += 1;
+          continue;
+        }
+        await writeText(path, next);
+        io.stdout(`${item.id} created #${number}\n`);
+      }
+    } catch (error) {
+      io.stderr(`${item.id} failed: ${error instanceof Error ? error.message : String(error)}\n`);
+      failed += 1;
+    }
+  }
+  return failed === 0 ? 0 : 1;
+}
+
 async function cmdLint(io: IO): Promise<number> {
   const dir = workDirOrError(io);
   if (!dir) return 1;
@@ -271,6 +325,7 @@ export async function cli(argv = Bun.argv.slice(2), io: IO = defaultIO): Promise
       case "ready": return await cmdReadyBlocked(args, io, false);
       case "blocked": return await cmdReadyBlocked(args, io, true);
       case "query": return await cmdQuery(args, io);
+      case "sync": return await cmdSync(args, io);
       case "lint": return await cmdLint(io);
       default:
         io.stderr(`Unknown command: ${command}\nKnown commands: ${commandNames().join(", ")}\nRun \`wl --help\` for usage.\n`);
