@@ -6,6 +6,7 @@ import { slugify } from "./slug";
 import { serializeStory, serializeSlice, rewriteScalar, rewriteList, upsertScalar } from "./frontmatter";
 import { loadItems, loadItemsWithIssues, resolveItem, sortItems, unresolvedDependencies, findCycles } from "./items";
 import { apiBase, createIssue, parseRepoSpec, resolveRepo, resolveToken, sliceIssuePayload, updateIssue, type GithubConfig } from "./github";
+import { ensureOverlayGitignore, overlayHash, readOverlay, writeOverlay, type Overlay } from "./overlay";
 import { Mode, SliceStatus, StoryStatus, type NormalizedItem, type NormalizedSlice } from "./schema";
 import { commandHelp, commandNames, mainHelp, usageLine, VERSION } from "./help";
 
@@ -47,7 +48,8 @@ function stringValue(value: string | boolean | Array<string | boolean> | undefin
 }
 
 async function cmdInit(io: IO): Promise<number> {
-  await initWorkDir(io.cwd);
+  const dir = await initWorkDir(io.cwd);
+  await ensureOverlayGitignore(dir);
   return 0;
 }
 
@@ -239,7 +241,13 @@ async function cmdSync(args: string[], io: IO): Promise<number> {
   const dryRun = Boolean(parsed.values["dry-run"]);
 
   if (dryRun) {
-    for (const { item } of slices) io.stdout(`${item.id} would ${item.issue ? `update #${item.issue}` : "create"}\n`);
+    for (const { item, path, body } of slices) {
+      const hash = overlayHash(sliceIssuePayload(item, body));
+      if (!item.issue) { io.stdout(`${item.id} would create\n`); continue; }
+      const overlay = await readOverlay(path);
+      const unchanged = overlay?.issue === item.issue && overlay?.hash === hash;
+      io.stdout(`${item.id} ${unchanged ? "up to date" : "would update"} #${item.issue}\n`);
+    }
     return 0;
   }
 
@@ -249,24 +257,38 @@ async function cmdSync(args: string[], io: IO): Promise<number> {
   const repo = repoSpec ? parseRepoSpec(repoSpec) : await resolveRepo(io.cwd, io.env);
   if (!repo) return usageError(io, "sync", "Could not determine GitHub repo. Pass --repo owner/name or set GITHUB_REPOSITORY.");
   const config: GithubConfig = { apiBase: apiBase(io.env), token, ...repo };
+  const repoSlug = `${repo.owner}/${repo.repo}`;
+  await ensureOverlayGitignore(dir);
+
+  const snapshot = (issue: number, payload: { title: string; state: "open" | "closed" }, url: string | undefined): Overlay => {
+    const base: Overlay = { issue, repo: repoSlug, hash: overlayHash(payload), remote: { title: payload.title, state: payload.state }, syncedAt: new Date().toISOString() };
+    return url === undefined ? base : { ...base, url };
+  };
 
   let failed = 0;
   for (const { item, path, body } of slices) {
     const payload = sliceIssuePayload(item, body);
     try {
       if (item.issue) {
-        await updateIssue(config, item.issue, payload);
+        const overlay = await readOverlay(path);
+        if (overlay?.issue === item.issue && overlay.hash === overlayHash(payload)) {
+          io.stdout(`${item.id} up to date #${item.issue}\n`);
+          continue;
+        }
+        await updateIssue(config, item.issue, { title: payload.title, state: payload.state });
+        await writeOverlay(path, snapshot(item.issue, payload, overlay?.url));
         io.stdout(`${item.id} updated #${item.issue}\n`);
       } else {
-        const number = await createIssue(config, payload);
-        const next = upsertScalar(await Bun.file(path).text(), "issue", String(number));
+        const created = await createIssue(config, payload);
+        const next = upsertScalar(await Bun.file(path).text(), "issue", String(created.number));
         if (!next) {
-          io.stderr(`${item.id} created #${number} but failed to write issue field: missing frontmatter\n`);
+          io.stderr(`${item.id} created #${created.number} but failed to write issue field: missing frontmatter\n`);
           failed += 1;
           continue;
         }
         await writeText(path, next);
-        io.stdout(`${item.id} created #${number}\n`);
+        await writeOverlay(path, snapshot(created.number, payload, created.url));
+        io.stdout(`${item.id} created #${created.number}\n`);
       }
     } catch (error) {
       io.stderr(`${item.id} failed: ${error instanceof Error ? error.message : String(error)}\n`);

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { join } from "node:path";
 type Server = ReturnType<typeof Bun.serve>;
 import { parseRepoUrl, parseRepoSpec, resolveToken, sliceIssuePayload } from "../src/github";
 import { upsertScalar } from "../src/frontmatter";
@@ -58,6 +59,30 @@ describe("wl sync --push", () => {
     expect(calls[0]?.method).toBe("POST");
     expect(calls[0]?.path).toBe("/repos/octo/worklog/issues");
     expect(await read(file)).toContain("issue: 42");
+    const overlay = JSON.parse(await read(file.replace(/\.md$/, ".json")));
+    expect(overlay).toMatchObject({ issue: 42, repo: "octo/worklog", remote: { state: "open" } });
+    expect(typeof overlay.hash).toBe("string");
+    expect(await read(join(repo, ".work", ".gitignore"))).toContain("*.json");
+  });
+
+  test("skips the GitHub call when the overlay hash matches the desired state", async () => {
+    const repo = await tempRepo();
+    await put(repo, "us-a11111-story.md", story());
+    const file = await put(repo, "sl-b22222-demo.md", slice("sl-b22222", ["us-a11111"]).replace("tags: [orders, telegram]", "tags: [orders, telegram]\nissue: 55"));
+
+    const firstServer = mockGithub({ create: 55 }).server;
+    const first = await run(repo, ["sync", "--push"], syncEnv(firstServer));
+    firstServer.stop(true);
+    expect(first.code).toBe(0);
+    expect(first.stdout).toBe("sl-b22222 updated #55\n");
+
+    const { server, calls } = mockGithub({ create: 55 });
+    active = server;
+    const second = await run(repo, ["sync", "--push"], syncEnv(server));
+    expect(second.code).toBe(0);
+    expect(second.stdout).toBe("sl-b22222 up to date #55\n");
+    expect(calls).toHaveLength(0);
+    expect(file).toContain("sl-b22222");
   });
 
   test("updates the existing issue when issue field is present and forwards state", async () => {
