@@ -244,7 +244,7 @@ async function cmdSync(args: string[], io: IO): Promise<number> {
   }
 
   const token = await resolveToken(io.env);
-  if (!token) return usageError(io, "sync", "No GitHub token found. Set GITHUB_TOKEN or authenticate with `gh auth login`.");
+  if (!token) return usageError(io, "sync", "No GitHub token found. Set WORKLOG_GITHUB_TOKEN (or GH_TOKEN/GITHUB_TOKEN) or authenticate with `gh auth login`.");
   const repoSpec = stringValue(parsed.values.repo);
   const repo = repoSpec ? parseRepoSpec(repoSpec) : await resolveRepo(io.cwd, io.env);
   if (!repo) return usageError(io, "sync", "Could not determine GitHub repo. Pass --repo owner/name or set GITHUB_REPOSITORY.");

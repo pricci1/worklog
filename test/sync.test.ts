@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 type Server = ReturnType<typeof Bun.serve>;
-import { parseRepoUrl, parseRepoSpec, sliceIssuePayload } from "../src/github";
+import { parseRepoUrl, parseRepoSpec, resolveToken, sliceIssuePayload } from "../src/github";
 import { upsertScalar } from "../src/frontmatter";
 import type { NormalizedSlice } from "../src/schema";
 import { put, read, run, slice, story, tempRepo } from "./helpers";
@@ -142,6 +142,13 @@ describe("github helpers", () => {
     expect(parseRepoUrl("https://github.com/octo/worklog")).toEqual({ owner: "octo", repo: "worklog" });
     expect(parseRepoUrl("ssh://git@github.com/octo/worklog.git")).toEqual({ owner: "octo", repo: "worklog" });
     expect(parseRepoUrl("https://example.com/octo/worklog")).toBeUndefined();
+  });
+
+  test("resolveToken prefers WORKLOG_GITHUB_TOKEN over GH_TOKEN/GITHUB_TOKEN", async () => {
+    expect(await resolveToken({ WORKLOG_GITHUB_TOKEN: "wl", GH_TOKEN: "gh", GITHUB_TOKEN: "gt" })).toBe("wl");
+    expect(await resolveToken({ GH_TOKEN: "gh", GITHUB_TOKEN: "gt" })).toBe("gh");
+    expect(await resolveToken({ GITHUB_TOKEN: "gt" })).toBe("gt");
+    expect(await resolveToken({ WORKLOG_GITHUB_TOKEN: "  ", GITHUB_TOKEN: "gt" })).toBe("gt");
   });
 
   test("parseRepoSpec validates owner/name", () => {

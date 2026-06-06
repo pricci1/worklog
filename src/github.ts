@@ -12,7 +12,7 @@ export function apiBase(env: Env): string {
 }
 
 export async function resolveToken(env: Env): Promise<string | undefined> {
-  const fromEnv = (env.GITHUB_TOKEN ?? env.GH_TOKEN ?? "").trim();
+  const fromEnv = [env.WORKLOG_GITHUB_TOKEN, env.GH_TOKEN, env.GITHUB_TOKEN].map((value) => value?.trim()).find((value) => value);
   if (fromEnv) return fromEnv;
   const gh = env.PATH === undefined ? Bun.which("gh") : Bun.which("gh", { PATH: env.PATH });
   if (!gh) return undefined;
