@@ -16,6 +16,7 @@ COMMANDS
   ready    List open slices whose dependencies are all done.
   blocked  List open slices with unresolved dependencies. Table output shows the unresolved IDs.
   query    Emit all items as a normalized JSON array. With a filter, pipe through jq.
+  sync     Create or update GitHub issues for slices (--push). Writes issue numbers back to frontmatter.
   lint     Validate frontmatter, schema, refs, cycles, and filename/ID consistency. Exit 1 on any error.
   help     Show top-level help, or help for a specific command.
 
@@ -24,8 +25,11 @@ GLOBAL OPTIONS
   -V, --version  Print version.
 
 ENVIRONMENT
-  WORKLOG_DIR    Override .work/ lookup. Relative paths resolve against cwd.
-  EDITOR         Editor used by `wl edit` (default: vi).
+  WORKLOG_DIR           Override .work/ lookup. Relative paths resolve against cwd.
+  EDITOR                Editor used by `wl edit` (default: vi).
+  WORKLOG_GITHUB_TOKEN  Token for `wl sync` (then GH_TOKEN, GITHUB_TOKEN, `gh auth token`).
+  GITHUB_REPOSITORY     Default owner/name target for `wl sync`.
+  GITHUB_API_URL        GitHub API base URL (default: https://api.github.com).
 
 ITEM KINDS
   story (us-…)   Business-facing intent. No implementation details.

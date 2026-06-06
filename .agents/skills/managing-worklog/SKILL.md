@@ -116,6 +116,24 @@ wl query '[.[] | select(.kind == "slice")] | group_by(.status) | map({status: .[
 
 Use this whenever you need to answer a structural question that isn't already a built-in command.
 
+## Syncing slices to GitHub Issues
+
+`wl sync --push` creates or updates a GitHub issue for each slice:
+
+```sh
+wl sync --push                       # push all slices
+wl sync --push --dry-run             # show planned create/update without calling GitHub
+wl sync --push --repo owner/name     # override the target repo
+```
+
+- A slice with no `issue` field gets a new issue created; the number is written back into the frontmatter as `issue: <n>`.
+- A slice that already has an `issue` updates that issue's title and open/closed state. `done`/`dropped` slices close the issue; others keep it open. The issue **body is only written on create**.
+- Each slice `.md` has a same-named, gitignored `.json` overlay holding the last-synced remote state. Pushes that match the overlay are skipped (no API call), reported as `up to date`.
+
+Token resolution order: `WORKLOG_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`, then `gh auth token`. Repo resolution: `--repo`, else `GITHUB_REPOSITORY`, else the `origin` git remote.
+
+Do not commit the `.json` overlays or hand-edit the `issue` field — let `wl sync` manage both.
+
 ## Validating before commit
 
 Run `wl lint` before any commit that touches `.work/`. It checks:
