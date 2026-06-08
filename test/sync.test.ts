@@ -8,7 +8,9 @@ import { put, read, run, slice, story, tempRepo } from "./helpers";
 
 type Recorded = { method: string; path: string; body: unknown };
 
-function mockGithub(handlers: { create?: number; issue?: { number?: number; title?: string; state?: "open" | "closed"; html_url?: string } } = {}): { server: Server; calls: Recorded[] } {
+type MockIssue = { number?: number; title?: string; state?: "open" | "closed" | "OPEN" | "CLOSED"; html_url?: string; labels?: { name: string }[]; body?: string };
+
+function mockGithub(handlers: { create?: number; issue?: MockIssue; issues?: MockIssue[] } = {}): { server: Server; calls: Recorded[] } {
   const calls: Recorded[] = [];
   const created = handlers.create ?? 101;
   const issue = handlers.issue ?? {};
@@ -18,6 +20,16 @@ function mockGithub(handlers: { create?: number; issue?: { number?: number; titl
       const url = new URL(req.url);
       const body = req.method === "GET" ? undefined : await req.json();
       calls.push({ method: req.method, path: url.pathname, body });
+      if (req.method === "GET" && url.pathname.endsWith("/issues")) {
+        return Response.json((handlers.issues ?? []).map((item) => ({
+          number: item.number ?? created,
+          title: item.title ?? "Remote title",
+          state: item.state ?? "open",
+          html_url: item.html_url,
+          labels: item.labels ?? [{ name: "worklog" }, { name: "kind:slice" }],
+          body: item.body,
+        })));
+      }
       if (req.method === "GET" && /\/issues\/\d+$/.test(url.pathname)) {
         return Response.json({ number: issue.number ?? created, title: issue.title ?? "Remote title", state: issue.state ?? "open", html_url: issue.html_url });
       }
@@ -122,7 +134,7 @@ describe("wl sync --push", () => {
     const repo = await tempRepo();
     const result = await run(repo, ["sync"]);
     expect(result.code).toBe(1);
-    expect(result.stderr).toContain("Specify exactly one of --push or --pull");
+    expect(result.stderr).toContain("Specify exactly one of --push, --pull, or --reconcile");
   });
 
   test("fails clearly when no token can be resolved", async () => {
@@ -220,6 +232,73 @@ describe("wl sync --pull", () => {
     expect(result.code).toBe(0);
     expect(result.stdout).toContain("sl-a00001 no issue");
     expect(result.stdout).toContain("sl-b00002 would pull #9");
+  });
+});
+
+describe("wl sync --reconcile", () => {
+  test("adopts exactly matching labeled issues by strict title prefix", async () => {
+    const repo = await tempRepo();
+    await put(repo, "us-a11111-story.md", story());
+    const file = await put(repo, "sl-b22222-demo.md", slice());
+    const { server, calls } = mockGithub({ issues: [{ number: 9, title: "[sl-b22222] Manual print action creates print jobs", state: "OPEN", html_url: "https://github.com/octo/worklog/issues/9" }] });
+    active = server;
+
+    const result = await run(repo, ["sync", "--reconcile"], syncEnv(server));
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toBe("sl-b22222 adopted #9\n");
+    expect(calls).toEqual([{ method: "GET", path: "/repos/octo/worklog/issues", body: undefined }]);
+    expect(await read(file)).toContain("issue: 9");
+    const overlay = JSON.parse(await read(file.replace(/\.md$/, ".json")));
+    expect(overlay).toMatchObject({ issue: 9, repo: "octo/worklog", url: "https://github.com/octo/worklog/issues/9", remote: { title: "[sl-b22222] Manual print action creates print jobs", state: "open" } });
+  });
+
+  test("does not match slice ids that only appear outside the title prefix", async () => {
+    const repo = await tempRepo();
+    await put(repo, "us-a11111-story.md", story());
+    const file = await put(repo, "sl-b22222-demo.md", slice());
+    const { server } = mockGithub({ issues: [
+      { number: 9, title: "Manual print action creates print jobs", body: "depends_on: sl-b22222" },
+      { number: 10, title: "[sl-c33333] References sl-b22222 in title body text" },
+    ] });
+    active = server;
+
+    const result = await run(repo, ["sync", "--reconcile"], syncEnv(server));
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toBe("sl-b22222 no matching issue\n");
+    expect(await read(file)).not.toContain("issue:");
+  });
+
+  test("fails ambiguous strict title matches without writing issue frontmatter", async () => {
+    const repo = await tempRepo();
+    await put(repo, "us-a11111-story.md", story());
+    const file = await put(repo, "sl-b22222-demo.md", slice());
+    const { server } = mockGithub({ issues: [
+      { number: 9, title: "[sl-b22222] First" },
+      { number: 10, title: "[sl-b22222] Second" },
+    ] });
+    active = server;
+
+    const result = await run(repo, ["sync", "--reconcile"], syncEnv(server));
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("sl-b22222 ambiguous matches: #9, #10");
+    expect(await read(file)).not.toContain("issue:");
+  });
+
+  test("--dry-run fetches matches but does not write adoption", async () => {
+    const repo = await tempRepo();
+    await put(repo, "us-a11111-story.md", story());
+    const file = await put(repo, "sl-b22222-demo.md", slice());
+    const { server } = mockGithub({ issues: [{ number: 9, title: "[sl-b22222] Remote" }] });
+    active = server;
+
+    const result = await run(repo, ["sync", "--reconcile", "--dry-run"], syncEnv(server));
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toBe("sl-b22222 would adopt #9\n");
+    expect(await read(file)).not.toContain("issue:");
   });
 });
 

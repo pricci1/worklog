@@ -5,8 +5,11 @@ export type Env = Record<string, string | undefined>;
 export type Repo = { owner: string; repo: string };
 export type GithubConfig = Repo & { apiBase: string; token: string };
 
+const IssueState = z.preprocess((value) => typeof value === "string" ? value.toLowerCase() : value, z.enum(["open", "closed"]));
+const LabelResponse = z.object({ name: z.string() });
 const IssueResponse = z.object({ number: z.number().int().positive(), html_url: z.string().optional() });
-const IssueSnapshotResponse = IssueResponse.extend({ title: z.string(), state: z.enum(["open", "closed"]) });
+const IssueSnapshotResponse = IssueResponse.extend({ title: z.string(), state: IssueState });
+const IssueListItemResponse = IssueSnapshotResponse.extend({ labels: z.array(LabelResponse), pull_request: z.unknown().optional() });
 
 export function apiBase(env: Env): string {
   return (env.GITHUB_API_URL?.trim() || "https://api.github.com").replace(/\/+$/, "");
@@ -56,6 +59,7 @@ export type IssuePayload = { title: string; body: string; state: "open" | "close
 export type IssueUpdate = { title: string; state: "open" | "closed" };
 export type CreatedIssue = { number: number; url?: string };
 export type IssueSnapshot = { number: number; title: string; state: "open" | "closed"; url?: string };
+export type ReconcileIssue = IssueSnapshot & { labels: string[] };
 
 function firstH1(body: string): string | undefined {
   for (const line of body.split("\n")) {
@@ -116,6 +120,23 @@ export async function getIssue(config: GithubConfig, issue: number): Promise<Iss
   const parsed = IssueSnapshotResponse.parse(body);
   const snapshot = { number: parsed.number, title: parsed.title, state: parsed.state };
   return parsed.html_url === undefined ? snapshot : { ...snapshot, url: parsed.html_url };
+}
+
+export async function listWorklogSliceIssues(config: GithubConfig): Promise<ReconcileIssue[]> {
+  const issues: ReconcileIssue[] = [];
+  for (let page = 1; ; page += 1) {
+    const body = await ghFetch(config, `/issues?state=all&labels=${encodeURIComponent("worklog,kind:slice")}&per_page=100&page=${page}`, { method: "GET" });
+    const parsed = z.array(IssueListItemResponse).parse(body);
+    for (const issue of parsed) {
+      if (issue.pull_request !== undefined) continue;
+      const labels = issue.labels.map((label) => label.name);
+      if (!labels.includes("worklog") || !labels.includes("kind:slice")) continue;
+      const snapshot = { number: issue.number, title: issue.title, state: issue.state, labels };
+      issues.push(issue.html_url === undefined ? snapshot : { ...snapshot, url: issue.html_url });
+    }
+    if (parsed.length < 100) break;
+  }
+  return issues;
 }
 
 export async function updateIssue(config: GithubConfig, issue: number, payload: IssueUpdate): Promise<void> {

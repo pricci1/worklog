@@ -104,14 +104,15 @@ const COMMANDS: readonly CommandSpec[] = [
   },
   {
     name: "sync",
-    usage: ["wl sync --push [--repo owner/name] [--dry-run]", "wl sync --pull [--repo owner/name] [--force] [--dry-run]"],
+    usage: ["wl sync --push [--repo owner/name] [--dry-run]", "wl sync --pull [--repo owner/name] [--force] [--dry-run]", "wl sync --reconcile [--repo owner/name] [--dry-run]"],
     summary: "Create, update, or pull GitHub issue state for slices.",
     details: [
       "OPTIONS",
       "  --push               Push slices to GitHub.",
       "  --pull               Pull issue title/state from GitHub into local slices.",
+      "  --reconcile          Adopt existing issues titled like [sl-xxxxxx] with worklog/kind:slice labels.",
       "  --repo owner/name    Target repository (default: GITHUB_REPOSITORY or git origin).",
-      "  --dry-run            Print planned create/update actions without calling GitHub.",
+      "  --dry-run            Print planned actions without writing changes (reconcile still fetches candidates).",
       "  --force              With --pull, overwrite local changes since the last sync.",
       "",
       "AUTH",
@@ -120,6 +121,7 @@ const COMMANDS: readonly CommandSpec[] = [
       "A slice with no `issue` field gets a new issue created and the number written back.",
       "A slice with an `issue` field updates that issue (title, body, open/closed state).",
       "Pull updates the slice H1 and maps GitHub open/closed state to local open/done status.",
+      "Reconcile lists labeled issues and matches only the strict title prefix [sl-xxxxxx].",
     ],
   },
   {

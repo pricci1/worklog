@@ -5,7 +5,7 @@ import { allocateId, itemPath } from "./ids";
 import { slugify } from "./slug";
 import { serializeStory, serializeSlice, rewriteScalar, rewriteList, upsertScalar } from "./frontmatter";
 import { loadItems, loadItemsWithIssues, resolveItem, sortItems, unresolvedDependencies, findCycles } from "./items";
-import { apiBase, createIssue, getIssue, parseRepoSpec, resolveRepo, resolveToken, sliceIssuePayload, updateIssue, type GithubConfig } from "./github";
+import { apiBase, createIssue, getIssue, listWorklogSliceIssues, parseRepoSpec, resolveRepo, resolveToken, sliceIssuePayload, updateIssue, type GithubConfig, type ReconcileIssue } from "./github";
 import { ensureOverlayGitignore, overlayHash, readOverlay, writeOverlay, type Overlay } from "./overlay";
 import { Mode, SliceStatus, StoryStatus, type NormalizedItem, type NormalizedSlice } from "./schema";
 import { commandHelp, commandNames, mainHelp, usageLine, VERSION } from "./help";
@@ -53,6 +53,10 @@ function replaceFirstH1(text: string, title: string): string {
   if (index === -1) return `${text.replace(/\s*$/, "")}\n\n# ${title}\n`;
   lines[index] = `# ${title}`;
   return lines.join("\n");
+}
+
+function titleSliceId(title: string): string | undefined {
+  return /^\[(sl-[0-9a-f]{6})\]\s+/i.exec(title)?.[1]?.toLowerCase();
 }
 
 async function cmdInit(io: IO): Promise<number> {
@@ -234,10 +238,11 @@ async function cmdQuery(args: string[], io: IO): Promise<number> {
 }
 
 async function cmdSync(args: string[], io: IO): Promise<number> {
-  const parsed = parseOptions(args, { push: { type: "boolean" }, pull: { type: "boolean" }, force: { type: "boolean" }, "dry-run": { type: "boolean" }, repo: { type: "string" } });
+  const parsed = parseOptions(args, { push: { type: "boolean" }, pull: { type: "boolean" }, reconcile: { type: "boolean" }, force: { type: "boolean" }, "dry-run": { type: "boolean" }, repo: { type: "string" } });
   const push = Boolean(parsed.values.push);
   const pull = Boolean(parsed.values.pull);
-  if (push === pull) return usageError(io, "sync", "Specify exactly one of --push or --pull");
+  const reconcile = Boolean(parsed.values.reconcile);
+  if ([push, pull, reconcile].filter(Boolean).length !== 1) return usageError(io, "sync", "Specify exactly one of --push, --pull, or --reconcile");
   const dir = workDirOrError(io);
   if (!dir) return 1;
   const { items, issues } = await loadItemsWithIssues(dir);
@@ -250,7 +255,7 @@ async function cmdSync(args: string[], io: IO): Promise<number> {
   const slices = items.filter((entry): entry is typeof entry & { item: NormalizedSlice } => entry.item.kind === "slice");
   const dryRun = Boolean(parsed.values["dry-run"]);
 
-  if (dryRun) {
+  if (dryRun && !reconcile) {
     for (const { item, path, body } of slices) {
       if (pull) {
         io.stdout(item.issue ? `${item.id} would pull #${item.issue}\n` : `${item.id} no issue\n`);
@@ -279,10 +284,53 @@ async function cmdSync(args: string[], io: IO): Promise<number> {
     return url === undefined ? base : { ...base, url };
   };
 
+  const reconcileMatches = new Map<string, ReconcileIssue[]>();
+  if (reconcile) {
+    for (const issue of await listWorklogSliceIssues(config)) {
+      const id = titleSliceId(issue.title);
+      if (!id) continue;
+      const matches = reconcileMatches.get(id) ?? [];
+      matches.push(issue);
+      reconcileMatches.set(id, matches);
+    }
+  }
+
   let failed = 0;
   for (const { item, path, body } of slices) {
     const payload = sliceIssuePayload(item, body);
     try {
+      if (reconcile) {
+        if (item.issue) {
+          io.stdout(`${item.id} already linked #${item.issue}\n`);
+          continue;
+        }
+        const matches = reconcileMatches.get(item.id) ?? [];
+        if (matches.length === 0) {
+          io.stdout(`${item.id} no matching issue\n`);
+          continue;
+        }
+        if (matches.length > 1) {
+          io.stderr(`${item.id} ambiguous matches: ${matches.map((issue) => `#${issue.number}`).join(", ")}\n`);
+          failed += 1;
+          continue;
+        }
+        const issue = matches[0]!;
+        if (dryRun) {
+          io.stdout(`${item.id} would adopt #${issue.number}\n`);
+          continue;
+        }
+        const next = upsertScalar(await Bun.file(path).text(), "issue", String(issue.number));
+        if (!next) {
+          io.stderr(`${item.id} failed to write issue field: missing frontmatter\n`);
+          failed += 1;
+          continue;
+        }
+        await writeText(path, next);
+        const base: Overlay = { issue: issue.number, repo: repoSlug, hash: overlayHash(payload), remote: { title: issue.title, state: issue.state }, syncedAt: new Date().toISOString() };
+        await writeOverlay(path, issue.url === undefined ? base : { ...base, url: issue.url });
+        io.stdout(`${item.id} adopted #${issue.number}\n`);
+        continue;
+      }
       if (pull) {
         if (!item.issue) {
           io.stdout(`${item.id} no issue\n`);
