@@ -61,7 +61,7 @@ function syncEnv(server: Server): Record<string, string | undefined> {
 }
 
 describe("wl sync --push", () => {
-  test("creates an issue and writes the number back to frontmatter", async () => {
+  test("creates an issue and writes the number to the overlay without touching markdown", async () => {
     const repo = await tempRepo();
     await put(repo, "us-a11111-story.md", story());
     const file = await put(repo, "sl-b22222-demo.md", slice());
@@ -75,7 +75,7 @@ describe("wl sync --push", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]?.method).toBe("POST");
     expect(calls[0]?.path).toBe("/repos/octo/worklog/issues");
-    expect(await read(file)).toContain("issue: 42");
+    expect(await read(file)).not.toContain("issue: 42");
     const overlay = JSON.parse(await read(file.replace(/\.md$/, ".json")));
     expect(overlay).toMatchObject({ issue: 42, repo: "octo/worklog", remote: { state: "open" } });
     expect(typeof overlay.hash).toBe("string");
@@ -131,7 +131,7 @@ describe("wl sync --push", () => {
     expect(result.stdout).toContain("sl-b00002 would update #9");
   });
 
-  test("bare sync pulls first, then pushes the refreshed local state", async () => {
+  test("bare sync pulls overlays first and does not overwrite remote when markdown differs", async () => {
     const repo = await tempRepo();
     await put(repo, "us-a11111-story.md", story());
     const file = await put(repo, "sl-b22222-demo.md", slice("sl-b22222", ["us-a11111"]).replace("tags: [orders, telegram]", "tags: [orders, telegram]\nissue: 42"));
@@ -141,11 +141,13 @@ describe("wl sync --push", () => {
     const result = await run(repo, ["sync"], syncEnv(server));
 
     expect(result.code).toBe(0);
-    expect(result.stdout).toBe("sl-b22222 pulled #42\nsl-b22222 up to date #42\n");
+    expect(result.stdout).toBe("sl-b22222 pulled #42\nsl-b22222 remote differs #42; use --push to overwrite\n");
     expect(calls).toEqual([{ method: "GET", path: "/repos/octo/worklog/issues/42", body: undefined }]);
     const text = await read(file);
-    expect(text).toContain("status: done");
-    expect(text).toContain("# Remote accepted title");
+    expect(text).toContain("status: open");
+    expect(text).toContain("# Slice sl-b22222");
+    const overlay = JSON.parse(await read(file.replace(/\.md$/, ".json")));
+    expect(overlay).toMatchObject({ issue: 42, remote: { title: "Remote accepted title", state: "closed" } });
   });
 
   test("bare sync creates slices with no linked issue after the pull phase", async () => {
@@ -160,7 +162,9 @@ describe("wl sync --push", () => {
     expect(result.code).toBe(0);
     expect(result.stdout).toBe("sl-b22222 no issue\nsl-b22222 created #42\n");
     expect(calls).toEqual([{ method: "POST", path: "/repos/octo/worklog/issues", body: expect.any(Object) }]);
-    expect(await read(file)).toContain("issue: 42");
+    expect(await read(file)).not.toContain("issue: 42");
+    const overlay = JSON.parse(await read(file.replace(/\.md$/, ".json")));
+    expect(overlay).toMatchObject({ issue: 42, remote: { state: "open" } });
   });
 
   test("fails clearly when no token can be resolved", async () => {
@@ -203,7 +207,7 @@ describe("wl sync --push", () => {
 });
 
 describe("wl sync --pull", () => {
-  test("fetches an issue and updates local title, status, and overlay", async () => {
+  test("fetches an issue and updates only the overlay", async () => {
     const repo = await tempRepo();
     await put(repo, "us-a11111-story.md", story());
     const file = await put(repo, "sl-b22222-demo.md", slice("sl-b22222", ["us-a11111"]).replace("tags: [orders, telegram]", "tags: [orders, telegram]\nissue: 42"));
@@ -216,13 +220,13 @@ describe("wl sync --pull", () => {
     expect(result.stdout).toBe("sl-b22222 pulled #42\n");
     expect(calls).toEqual([{ method: "GET", path: "/repos/octo/worklog/issues/42", body: undefined }]);
     const text = await read(file);
-    expect(text).toContain("status: done");
-    expect(text).toContain("# Remote accepted title");
+    expect(text).toContain("status: open");
+    expect(text).toContain("# Slice sl-b22222");
     const overlay = JSON.parse(await read(file.replace(/\.md$/, ".json")));
     expect(overlay).toMatchObject({ issue: 42, repo: "octo/worklog", url: "https://github.com/octo/worklog/issues/42", remote: { title: "Remote accepted title", state: "closed" } });
   });
 
-  test("refuses to overwrite local edits since last sync unless --force is passed", async () => {
+  test("pull updates overlays without overwriting local markdown edits", async () => {
     const repo = await tempRepo();
     await put(repo, "us-a11111-story.md", story());
     const file = await put(repo, "sl-b22222-demo.md", slice("sl-b22222", ["us-a11111"]).replace("tags: [orders, telegram]", "tags: [orders, telegram]\nissue: 42"));
@@ -230,21 +234,17 @@ describe("wl sync --pull", () => {
     const first = await run(repo, ["sync", "--pull"], syncEnv(firstServer));
     firstServer.stop(true);
     expect(first.code).toBe(0);
-    await put(repo, "sl-b22222-demo.md", (await read(file)).replace("# First remote title", "# Local unsynced title"));
+    await put(repo, "sl-b22222-demo.md", (await read(file)).replace("# Slice sl-b22222", "# Local unsynced title"));
 
     const { server, calls } = mockGithub({ issue: { number: 42, title: "Second remote title", state: "closed" } });
     active = server;
-    const refused = await run(repo, ["sync", "--pull"], syncEnv(server));
-    expect(refused.code).toBe(1);
-    expect(refused.stderr).toContain("local changes differ from last sync");
-    expect(calls).toHaveLength(0);
-    expect(await read(file)).toContain("# Local unsynced title");
-
-    const forced = await run(repo, ["sync", "--pull", "--force"], syncEnv(server));
-    expect(forced.code).toBe(0);
-    expect(forced.stdout).toBe("sl-b22222 pulled #42\n");
+    const result = await run(repo, ["sync", "--pull"], syncEnv(server));
+    expect(result.code).toBe(0);
+    expect(result.stdout).toBe("sl-b22222 pulled #42\n");
     expect(calls).toEqual([{ method: "GET", path: "/repos/octo/worklog/issues/42", body: undefined }]);
-    expect(await read(file)).toContain("# Second remote title");
+    expect(await read(file)).toContain("# Local unsynced title");
+    const overlay = JSON.parse(await read(file.replace(/\.md$/, ".json")));
+    expect(overlay).toMatchObject({ issue: 42, remote: { title: "Second remote title", state: "closed" } });
   });
 
   test("--dry-run reports pull actions without auth or network", async () => {
@@ -313,7 +313,7 @@ describe("wl sync --reconcile", () => {
     expect(result.code).toBe(0);
     expect(result.stdout).toBe("sl-b22222 adopted #9\n");
     expect(calls).toEqual([{ method: "GET", path: "/repos/octo/worklog/issues", body: undefined }]);
-    expect(await read(file)).toContain("issue: 9");
+    expect(await read(file)).not.toContain("issue: 9");
     const overlay = JSON.parse(await read(file.replace(/\.md$/, ".json")));
     expect(overlay).toMatchObject({ issue: 9, repo: "octo/worklog", url: "https://github.com/octo/worklog/issues/9", remote: { title: "[sl-b22222] Manual print action creates print jobs", state: "open" } });
   });

@@ -245,6 +245,7 @@ async function cmdSync(args: string[], io: IO): Promise<number> {
   const persist = Boolean(parsed.values.persist);
   if (reconcile && (push || pull || persist)) return usageError(io, "sync", "--reconcile cannot be combined with --push, --pull, or --persist");
   if (persist && (push || pull)) return usageError(io, "sync", "--persist cannot be combined with --push or --pull");
+  if (parsed.values.force && !persist) return usageError(io, "sync", "--force can only be used with --persist");
   if (push && pull) return usageError(io, "sync", "Specify at most one of --push or --pull");
   const runPull = pull || (!push && !reconcile && !persist);
   const runPush = push || (!pull && !reconcile && !persist);
@@ -295,18 +296,21 @@ async function cmdSync(args: string[], io: IO): Promise<number> {
   }
 
   if (dryRun && !reconcile) {
-    for (const { item } of slices) {
+    for (const { item, path } of slices) {
       if (runPull) {
-        io.stdout(item.issue ? `${item.id} would pull #${item.issue}\n` : `${item.id} no issue\n`);
+        const overlay = await readOverlay(path);
+        const issue = item.issue ?? overlay?.issue;
+        io.stdout(issue ? `${item.id} would pull #${issue}\n` : `${item.id} no issue\n`);
       }
     }
     for (const { item, path, body } of slices) {
       if (!runPush) continue;
       const hash = overlayHash(sliceIssuePayload(item, body));
-      if (!item.issue) { io.stdout(`${item.id} would create\n`); continue; }
       const overlay = await readOverlay(path);
-      const unchanged = overlay?.issue === item.issue && overlay?.hash === hash;
-      io.stdout(`${item.id} ${unchanged ? "up to date" : "would update"} #${item.issue}\n`);
+      const issue = item.issue ?? overlay?.issue;
+      if (!issue) { io.stdout(`${item.id} would create\n`); continue; }
+      const unchanged = overlay?.issue === issue && overlay?.hash === hash;
+      io.stdout(`${item.id} ${unchanged ? "up to date" : "would update"} #${issue}\n`);
     }
     return 0;
   }
@@ -340,8 +344,10 @@ async function cmdSync(args: string[], io: IO): Promise<number> {
   if (reconcile) for (const { item, path, body } of slices) {
     const payload = sliceIssuePayload(item, body);
     try {
-      if (item.issue) {
-        io.stdout(`${item.id} already linked #${item.issue}\n`);
+      const overlay = await readOverlay(path);
+      const linkedIssue = item.issue ?? overlay?.issue;
+      if (linkedIssue) {
+        io.stdout(`${item.id} already linked #${linkedIssue}\n`);
         continue;
       }
       const matches = reconcileMatches.get(item.id) ?? [];
@@ -359,13 +365,6 @@ async function cmdSync(args: string[], io: IO): Promise<number> {
         io.stdout(`${item.id} would adopt #${issue.number}\n`);
         continue;
       }
-      const next = upsertScalar(await Bun.file(path).text(), "issue", String(issue.number));
-      if (!next) {
-        io.stderr(`${item.id} failed to write issue field: missing frontmatter\n`);
-        failed += 1;
-        continue;
-      }
-      await writeText(path, next);
       const base: Overlay = { issue: issue.number, repo: repoSlug, hash: overlayHash(payload), remote: { title: issue.title, state: issue.state }, syncedAt: new Date().toISOString() };
       await writeOverlay(path, issue.url === undefined ? base : { ...base, url: issue.url });
       io.stdout(`${item.id} adopted #${issue.number}\n`);
@@ -375,27 +374,17 @@ async function cmdSync(args: string[], io: IO): Promise<number> {
     }
   }
   if (runPull) {
-    for (const { item, path, body } of slices) {
-      const payload = sliceIssuePayload(item, body);
+    for (const { item, path } of slices) {
       try {
-        if (!item.issue) {
+        const overlay = await readOverlay(path);
+        const issueNumber = item.issue ?? overlay?.issue;
+        if (!issueNumber) {
           io.stdout(`${item.id} no issue\n`);
           continue;
         }
-        const overlay = await readOverlay(path);
-        const localChanged = overlay?.issue === item.issue && overlay.hash !== overlayHash(payload);
-        if (localChanged && !parsed.values.force) {
-          io.stderr(`${item.id} refused: local changes differ from last sync; use --force to overwrite\n`);
-          failed += 1;
-          continue;
-        }
-        const issue = await getIssue(config, item.issue);
-        const nextStatus = issue.state === "closed" ? "done" : "open";
-        let next = replaceFirstH1(await Bun.file(path).text(), issue.title);
-        next = rewriteScalar(next, "status", nextStatus) ?? next;
-        await writeText(path, next);
-        await writeOverlay(path, snapshot(item.issue, { title: issue.title, state: issue.state }, issue.url ?? overlay?.url));
-        io.stdout(`${item.id} pulled #${item.issue}\n`);
+        const issue = await getIssue(config, issueNumber);
+        await writeOverlay(path, snapshot(issueNumber, { title: issue.title, state: issue.state }, issue.url ?? overlay?.url));
+        io.stdout(`${item.id} pulled #${issueNumber}\n`);
         continue;
       } catch (error) {
         io.stderr(`${item.id} failed: ${error instanceof Error ? error.message : String(error)}\n`);
@@ -404,31 +393,26 @@ async function cmdSync(args: string[], io: IO): Promise<number> {
     }
   }
   if (runPush && failed === 0) {
-    if (runPull) {
-      ({ items } = await loadItemsWithIssues(dir));
-      slices = items.filter((entry): entry is typeof entry & { item: NormalizedSlice } => entry.item.kind === "slice");
-    }
     for (const { item, path, body } of slices) {
       const payload = sliceIssuePayload(item, body);
       try {
-        if (item.issue) {
-          const overlay = await readOverlay(path);
-          if (overlay?.issue === item.issue && overlay.hash === overlayHash(payload)) {
-            io.stdout(`${item.id} up to date #${item.issue}\n`);
+        const overlay = await readOverlay(path);
+        const issueNumber = item.issue ?? overlay?.issue;
+        if (issueNumber) {
+          const hash = overlayHash(payload);
+          if (overlay?.issue === issueNumber && overlay.hash === hash) {
+            io.stdout(`${item.id} up to date #${issueNumber}\n`);
             continue;
           }
-          await updateIssue(config, item.issue, { title: payload.title, state: payload.state });
-          await writeOverlay(path, snapshot(item.issue, payload, overlay?.url));
-          io.stdout(`${item.id} updated #${item.issue}\n`);
+          if (runPull && !push) {
+            io.stdout(`${item.id} remote differs #${issueNumber}; use --push to overwrite\n`);
+            continue;
+          }
+          await updateIssue(config, issueNumber, { title: payload.title, state: payload.state });
+          await writeOverlay(path, snapshot(issueNumber, payload, overlay?.url));
+          io.stdout(`${item.id} updated #${issueNumber}\n`);
         } else {
           const created = await createIssue(config, payload);
-          const next = upsertScalar(await Bun.file(path).text(), "issue", String(created.number));
-          if (!next) {
-            io.stderr(`${item.id} created #${created.number} but failed to write issue field: missing frontmatter\n`);
-            failed += 1;
-            continue;
-          }
-          await writeText(path, next);
           await writeOverlay(path, snapshot(created.number, payload, created.url));
           io.stdout(`${item.id} created #${created.number}\n`);
         }
