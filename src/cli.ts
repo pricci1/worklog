@@ -242,25 +242,30 @@ async function cmdSync(args: string[], io: IO): Promise<number> {
   const push = Boolean(parsed.values.push);
   const pull = Boolean(parsed.values.pull);
   const reconcile = Boolean(parsed.values.reconcile);
-  if ([push, pull, reconcile].filter(Boolean).length !== 1) return usageError(io, "sync", "Specify exactly one of --push, --pull, or --reconcile");
+  if (reconcile && (push || pull)) return usageError(io, "sync", "--reconcile cannot be combined with --push or --pull");
+  if (push && pull) return usageError(io, "sync", "Specify at most one of --push or --pull");
+  const runPull = pull || (!push && !reconcile);
+  const runPush = push || (!pull && !reconcile);
   const dir = workDirOrError(io);
   if (!dir) return 1;
-  const { items, issues } = await loadItemsWithIssues(dir);
+  let { items, issues } = await loadItemsWithIssues(dir);
   const errors = issues.filter((issue) => !issue.warning);
   if (errors.length > 0) {
     for (const issue of errors) io.stderr(`error: ${issue.file}${issue.id ? ` ${issue.id}` : ""}: ${issue.problem}\n`);
     io.stderr("Fix lint errors before syncing.\n");
     return 1;
   }
-  const slices = items.filter((entry): entry is typeof entry & { item: NormalizedSlice } => entry.item.kind === "slice");
+  let slices = items.filter((entry): entry is typeof entry & { item: NormalizedSlice } => entry.item.kind === "slice");
   const dryRun = Boolean(parsed.values["dry-run"]);
 
   if (dryRun && !reconcile) {
-    for (const { item, path, body } of slices) {
-      if (pull) {
+    for (const { item } of slices) {
+      if (runPull) {
         io.stdout(item.issue ? `${item.id} would pull #${item.issue}\n` : `${item.id} no issue\n`);
-        continue;
       }
+    }
+    for (const { item, path, body } of slices) {
+      if (!runPush) continue;
       const hash = overlayHash(sliceIssuePayload(item, body));
       if (!item.issue) { io.stdout(`${item.id} would create\n`); continue; }
       const overlay = await readOverlay(path);
@@ -296,42 +301,47 @@ async function cmdSync(args: string[], io: IO): Promise<number> {
   }
 
   let failed = 0;
-  for (const { item, path, body } of slices) {
+  if (reconcile) for (const { item, path, body } of slices) {
     const payload = sliceIssuePayload(item, body);
     try {
-      if (reconcile) {
-        if (item.issue) {
-          io.stdout(`${item.id} already linked #${item.issue}\n`);
-          continue;
-        }
-        const matches = reconcileMatches.get(item.id) ?? [];
-        if (matches.length === 0) {
-          io.stdout(`${item.id} no matching issue\n`);
-          continue;
-        }
-        if (matches.length > 1) {
-          io.stderr(`${item.id} ambiguous matches: ${matches.map((issue) => `#${issue.number}`).join(", ")}\n`);
-          failed += 1;
-          continue;
-        }
-        const issue = matches[0]!;
-        if (dryRun) {
-          io.stdout(`${item.id} would adopt #${issue.number}\n`);
-          continue;
-        }
-        const next = upsertScalar(await Bun.file(path).text(), "issue", String(issue.number));
-        if (!next) {
-          io.stderr(`${item.id} failed to write issue field: missing frontmatter\n`);
-          failed += 1;
-          continue;
-        }
-        await writeText(path, next);
-        const base: Overlay = { issue: issue.number, repo: repoSlug, hash: overlayHash(payload), remote: { title: issue.title, state: issue.state }, syncedAt: new Date().toISOString() };
-        await writeOverlay(path, issue.url === undefined ? base : { ...base, url: issue.url });
-        io.stdout(`${item.id} adopted #${issue.number}\n`);
+      if (item.issue) {
+        io.stdout(`${item.id} already linked #${item.issue}\n`);
         continue;
       }
-      if (pull) {
+      const matches = reconcileMatches.get(item.id) ?? [];
+      if (matches.length === 0) {
+        io.stdout(`${item.id} no matching issue\n`);
+        continue;
+      }
+      if (matches.length > 1) {
+        io.stderr(`${item.id} ambiguous matches: ${matches.map((issue) => `#${issue.number}`).join(", ")}\n`);
+        failed += 1;
+        continue;
+      }
+      const issue = matches[0]!;
+      if (dryRun) {
+        io.stdout(`${item.id} would adopt #${issue.number}\n`);
+        continue;
+      }
+      const next = upsertScalar(await Bun.file(path).text(), "issue", String(issue.number));
+      if (!next) {
+        io.stderr(`${item.id} failed to write issue field: missing frontmatter\n`);
+        failed += 1;
+        continue;
+      }
+      await writeText(path, next);
+      const base: Overlay = { issue: issue.number, repo: repoSlug, hash: overlayHash(payload), remote: { title: issue.title, state: issue.state }, syncedAt: new Date().toISOString() };
+      await writeOverlay(path, issue.url === undefined ? base : { ...base, url: issue.url });
+      io.stdout(`${item.id} adopted #${issue.number}\n`);
+    } catch (error) {
+      io.stderr(`${item.id} failed: ${error instanceof Error ? error.message : String(error)}\n`);
+      failed += 1;
+    }
+  }
+  if (runPull) {
+    for (const { item, path, body } of slices) {
+      const payload = sliceIssuePayload(item, body);
+      try {
         if (!item.issue) {
           io.stdout(`${item.id} no issue\n`);
           continue;
@@ -351,31 +361,45 @@ async function cmdSync(args: string[], io: IO): Promise<number> {
         await writeOverlay(path, snapshot(item.issue, { title: issue.title, state: issue.state }, issue.url ?? overlay?.url));
         io.stdout(`${item.id} pulled #${item.issue}\n`);
         continue;
+      } catch (error) {
+        io.stderr(`${item.id} failed: ${error instanceof Error ? error.message : String(error)}\n`);
+        failed += 1;
       }
-      if (item.issue) {
-        const overlay = await readOverlay(path);
-        if (overlay?.issue === item.issue && overlay.hash === overlayHash(payload)) {
-          io.stdout(`${item.id} up to date #${item.issue}\n`);
-          continue;
+    }
+  }
+  if (runPush && failed === 0) {
+    if (runPull) {
+      ({ items } = await loadItemsWithIssues(dir));
+      slices = items.filter((entry): entry is typeof entry & { item: NormalizedSlice } => entry.item.kind === "slice");
+    }
+    for (const { item, path, body } of slices) {
+      const payload = sliceIssuePayload(item, body);
+      try {
+        if (item.issue) {
+          const overlay = await readOverlay(path);
+          if (overlay?.issue === item.issue && overlay.hash === overlayHash(payload)) {
+            io.stdout(`${item.id} up to date #${item.issue}\n`);
+            continue;
+          }
+          await updateIssue(config, item.issue, { title: payload.title, state: payload.state });
+          await writeOverlay(path, snapshot(item.issue, payload, overlay?.url));
+          io.stdout(`${item.id} updated #${item.issue}\n`);
+        } else {
+          const created = await createIssue(config, payload);
+          const next = upsertScalar(await Bun.file(path).text(), "issue", String(created.number));
+          if (!next) {
+            io.stderr(`${item.id} created #${created.number} but failed to write issue field: missing frontmatter\n`);
+            failed += 1;
+            continue;
+          }
+          await writeText(path, next);
+          await writeOverlay(path, snapshot(created.number, payload, created.url));
+          io.stdout(`${item.id} created #${created.number}\n`);
         }
-        await updateIssue(config, item.issue, { title: payload.title, state: payload.state });
-        await writeOverlay(path, snapshot(item.issue, payload, overlay?.url));
-        io.stdout(`${item.id} updated #${item.issue}\n`);
-      } else {
-        const created = await createIssue(config, payload);
-        const next = upsertScalar(await Bun.file(path).text(), "issue", String(created.number));
-        if (!next) {
-          io.stderr(`${item.id} created #${created.number} but failed to write issue field: missing frontmatter\n`);
-          failed += 1;
-          continue;
-        }
-        await writeText(path, next);
-        await writeOverlay(path, snapshot(created.number, payload, created.url));
-        io.stdout(`${item.id} created #${created.number}\n`);
+      } catch (error) {
+        io.stderr(`${item.id} failed: ${error instanceof Error ? error.message : String(error)}\n`);
+        failed += 1;
       }
-    } catch (error) {
-      io.stderr(`${item.id} failed: ${error instanceof Error ? error.message : String(error)}\n`);
-      failed += 1;
     }
   }
   return failed === 0 ? 0 : 1;

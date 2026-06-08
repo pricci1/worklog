@@ -130,11 +130,36 @@ describe("wl sync --push", () => {
     expect(result.stdout).toContain("sl-b00002 would update #9");
   });
 
-  test("requires --push", async () => {
+  test("bare sync pulls first, then pushes the refreshed local state", async () => {
     const repo = await tempRepo();
-    const result = await run(repo, ["sync"]);
-    expect(result.code).toBe(1);
-    expect(result.stderr).toContain("Specify exactly one of --push, --pull, or --reconcile");
+    await put(repo, "us-a11111-story.md", story());
+    const file = await put(repo, "sl-b22222-demo.md", slice("sl-b22222", ["us-a11111"]).replace("tags: [orders, telegram]", "tags: [orders, telegram]\nissue: 42"));
+    const { server, calls } = mockGithub({ issue: { number: 42, title: "Remote accepted title", state: "closed" } });
+    active = server;
+
+    const result = await run(repo, ["sync"], syncEnv(server));
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toBe("sl-b22222 pulled #42\nsl-b22222 up to date #42\n");
+    expect(calls).toEqual([{ method: "GET", path: "/repos/octo/worklog/issues/42", body: undefined }]);
+    const text = await read(file);
+    expect(text).toContain("status: done");
+    expect(text).toContain("# Remote accepted title");
+  });
+
+  test("bare sync creates slices with no linked issue after the pull phase", async () => {
+    const repo = await tempRepo();
+    await put(repo, "us-a11111-story.md", story());
+    const file = await put(repo, "sl-b22222-demo.md", slice());
+    const { server, calls } = mockGithub({ create: 42 });
+    active = server;
+
+    const result = await run(repo, ["sync"], syncEnv(server));
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toBe("sl-b22222 no issue\nsl-b22222 created #42\n");
+    expect(calls).toEqual([{ method: "POST", path: "/repos/octo/worklog/issues", body: expect.any(Object) }]);
+    expect(await read(file)).toContain("issue: 42");
   });
 
   test("fails clearly when no token can be resolved", async () => {

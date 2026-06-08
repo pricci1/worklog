@@ -104,10 +104,11 @@ const COMMANDS: readonly CommandSpec[] = [
   },
   {
     name: "sync",
-    usage: ["wl sync --push [--repo owner/name] [--dry-run]", "wl sync --pull [--repo owner/name] [--force] [--dry-run]", "wl sync --reconcile [--repo owner/name] [--dry-run]"],
+    usage: ["wl sync [--repo owner/name] [--force] [--dry-run]", "wl sync --push [--repo owner/name] [--dry-run]", "wl sync --pull [--repo owner/name] [--force] [--dry-run]", "wl sync --reconcile [--repo owner/name] [--dry-run]"],
     summary: "Create, update, or pull GitHub issue state for slices.",
     details: [
       "OPTIONS",
+      "  (no mode)            Pull first, then push slices to GitHub.",
       "  --push               Push slices to GitHub.",
       "  --pull               Pull issue title/state from GitHub into local slices.",
       "  --reconcile          Adopt existing issues titled like [sl-xxxxxx] with worklog/kind:slice labels.",
@@ -118,6 +119,7 @@ const COMMANDS: readonly CommandSpec[] = [
       "AUTH",
       "  Token resolution order: WORKLOG_GITHUB_TOKEN, GH_TOKEN, GITHUB_TOKEN, then `gh auth token`.",
       "",
+      "Without a mode flag, sync pulls remote title/state first and then pushes local slices.",
       "A slice with no `issue` field gets a new issue created and the number written back.",
       "A slice with an `issue` field updates that issue (title, body, open/closed state).",
       "Pull updates the slice H1 and maps GitHub open/closed state to local open/done status.",
