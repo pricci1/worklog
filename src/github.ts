@@ -6,6 +6,7 @@ export type Repo = { owner: string; repo: string };
 export type GithubConfig = Repo & { apiBase: string; token: string };
 
 const IssueResponse = z.object({ number: z.number().int().positive(), html_url: z.string().optional() });
+const IssueSnapshotResponse = IssueResponse.extend({ title: z.string(), state: z.enum(["open", "closed"]) });
 
 export function apiBase(env: Env): string {
   return (env.GITHUB_API_URL?.trim() || "https://api.github.com").replace(/\/+$/, "");
@@ -54,6 +55,7 @@ export async function resolveRepo(cwd: string, env: Env): Promise<Repo | undefin
 export type IssuePayload = { title: string; body: string; state: "open" | "closed" };
 export type IssueUpdate = { title: string; state: "open" | "closed" };
 export type CreatedIssue = { number: number; url?: string };
+export type IssueSnapshot = { number: number; title: string; state: "open" | "closed"; url?: string };
 
 function firstH1(body: string): string | undefined {
   for (const line of body.split("\n")) {
@@ -107,6 +109,13 @@ export async function createIssue(config: GithubConfig, payload: IssuePayload): 
   const body = await ghFetch(config, "/issues", { method: "POST", body: JSON.stringify(payload) });
   const parsed = IssueResponse.parse(body);
   return parsed.html_url === undefined ? { number: parsed.number } : { number: parsed.number, url: parsed.html_url };
+}
+
+export async function getIssue(config: GithubConfig, issue: number): Promise<IssueSnapshot> {
+  const body = await ghFetch(config, `/issues/${issue}`, { method: "GET" });
+  const parsed = IssueSnapshotResponse.parse(body);
+  const snapshot = { number: parsed.number, title: parsed.title, state: parsed.state };
+  return parsed.html_url === undefined ? snapshot : { ...snapshot, url: parsed.html_url };
 }
 
 export async function updateIssue(config: GithubConfig, issue: number, payload: IssueUpdate): Promise<void> {

@@ -8,15 +8,19 @@ import { put, read, run, slice, story, tempRepo } from "./helpers";
 
 type Recorded = { method: string; path: string; body: unknown };
 
-function mockGithub(handlers: { create?: number } = {}): { server: Server; calls: Recorded[] } {
+function mockGithub(handlers: { create?: number; issue?: { number?: number; title?: string; state?: "open" | "closed"; html_url?: string } } = {}): { server: Server; calls: Recorded[] } {
   const calls: Recorded[] = [];
   const created = handlers.create ?? 101;
+  const issue = handlers.issue ?? {};
   const server = Bun.serve({
     port: 0,
     async fetch(req) {
       const url = new URL(req.url);
       const body = req.method === "GET" ? undefined : await req.json();
       calls.push({ method: req.method, path: url.pathname, body });
+      if (req.method === "GET" && /\/issues\/\d+$/.test(url.pathname)) {
+        return Response.json({ number: issue.number ?? created, title: issue.title ?? "Remote title", state: issue.state ?? "open", html_url: issue.html_url });
+      }
       if (req.method === "POST" && url.pathname.endsWith("/issues")) {
         return Response.json({ number: created }, { status: 201 });
       }
@@ -118,7 +122,7 @@ describe("wl sync --push", () => {
     const repo = await tempRepo();
     const result = await run(repo, ["sync"]);
     expect(result.code).toBe(1);
-    expect(result.stderr).toContain("--push is required");
+    expect(result.stderr).toContain("Specify exactly one of --push or --pull");
   });
 
   test("fails clearly when no token can be resolved", async () => {
@@ -157,6 +161,65 @@ describe("wl sync --push", () => {
     expect(result.code).toBe(1);
     expect(result.stderr).toContain("sl-b22222 failed");
     expect(result.stderr).toContain("422");
+  });
+});
+
+describe("wl sync --pull", () => {
+  test("fetches an issue and updates local title, status, and overlay", async () => {
+    const repo = await tempRepo();
+    await put(repo, "us-a11111-story.md", story());
+    const file = await put(repo, "sl-b22222-demo.md", slice("sl-b22222", ["us-a11111"]).replace("tags: [orders, telegram]", "tags: [orders, telegram]\nissue: 42"));
+    const { server, calls } = mockGithub({ issue: { number: 42, title: "Remote accepted title", state: "closed", html_url: "https://github.com/octo/worklog/issues/42" } });
+    active = server;
+
+    const result = await run(repo, ["sync", "--pull"], syncEnv(server));
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toBe("sl-b22222 pulled #42\n");
+    expect(calls).toEqual([{ method: "GET", path: "/repos/octo/worklog/issues/42", body: undefined }]);
+    const text = await read(file);
+    expect(text).toContain("status: done");
+    expect(text).toContain("# Remote accepted title");
+    const overlay = JSON.parse(await read(file.replace(/\.md$/, ".json")));
+    expect(overlay).toMatchObject({ issue: 42, repo: "octo/worklog", url: "https://github.com/octo/worklog/issues/42", remote: { title: "Remote accepted title", state: "closed" } });
+  });
+
+  test("refuses to overwrite local edits since last sync unless --force is passed", async () => {
+    const repo = await tempRepo();
+    await put(repo, "us-a11111-story.md", story());
+    const file = await put(repo, "sl-b22222-demo.md", slice("sl-b22222", ["us-a11111"]).replace("tags: [orders, telegram]", "tags: [orders, telegram]\nissue: 42"));
+    const firstServer = mockGithub({ issue: { number: 42, title: "First remote title", state: "open" } }).server;
+    const first = await run(repo, ["sync", "--pull"], syncEnv(firstServer));
+    firstServer.stop(true);
+    expect(first.code).toBe(0);
+    await put(repo, "sl-b22222-demo.md", (await read(file)).replace("# First remote title", "# Local unsynced title"));
+
+    const { server, calls } = mockGithub({ issue: { number: 42, title: "Second remote title", state: "closed" } });
+    active = server;
+    const refused = await run(repo, ["sync", "--pull"], syncEnv(server));
+    expect(refused.code).toBe(1);
+    expect(refused.stderr).toContain("local changes differ from last sync");
+    expect(calls).toHaveLength(0);
+    expect(await read(file)).toContain("# Local unsynced title");
+
+    const forced = await run(repo, ["sync", "--pull", "--force"], syncEnv(server));
+    expect(forced.code).toBe(0);
+    expect(forced.stdout).toBe("sl-b22222 pulled #42\n");
+    expect(calls).toEqual([{ method: "GET", path: "/repos/octo/worklog/issues/42", body: undefined }]);
+    expect(await read(file)).toContain("# Second remote title");
+  });
+
+  test("--dry-run reports pull actions without auth or network", async () => {
+    const repo = await tempRepo();
+    await put(repo, "us-a11111-story.md", story());
+    await put(repo, "sl-a00001-new.md", slice("sl-a00001"));
+    await put(repo, "sl-b00002-known.md", slice("sl-b00002", ["us-a11111"]).replace("tags: [orders, telegram]", "tags: [orders, telegram]\nissue: 9"));
+
+    const result = await run(repo, ["sync", "--pull", "--dry-run"], { GITHUB_TOKEN: undefined, GH_TOKEN: undefined, PATH: "/tmp/wl-no-gh" });
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("sl-a00001 no issue");
+    expect(result.stdout).toContain("sl-b00002 would pull #9");
   });
 });
 

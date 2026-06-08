@@ -5,7 +5,7 @@ import { allocateId, itemPath } from "./ids";
 import { slugify } from "./slug";
 import { serializeStory, serializeSlice, rewriteScalar, rewriteList, upsertScalar } from "./frontmatter";
 import { loadItems, loadItemsWithIssues, resolveItem, sortItems, unresolvedDependencies, findCycles } from "./items";
-import { apiBase, createIssue, parseRepoSpec, resolveRepo, resolveToken, sliceIssuePayload, updateIssue, type GithubConfig } from "./github";
+import { apiBase, createIssue, getIssue, parseRepoSpec, resolveRepo, resolveToken, sliceIssuePayload, updateIssue, type GithubConfig } from "./github";
 import { ensureOverlayGitignore, overlayHash, readOverlay, writeOverlay, type Overlay } from "./overlay";
 import { Mode, SliceStatus, StoryStatus, type NormalizedItem, type NormalizedSlice } from "./schema";
 import { commandHelp, commandNames, mainHelp, usageLine, VERSION } from "./help";
@@ -45,6 +45,14 @@ function parseOptions(args: string[], options: Record<string, { type: "string" |
 
 function stringValue(value: string | boolean | Array<string | boolean> | undefined): string | undefined {
   return typeof value === "string" ? value : undefined;
+}
+
+function replaceFirstH1(text: string, title: string): string {
+  const lines = text.split("\n");
+  const index = lines.findIndex((line) => /^#\s+.+$/.test(line.trim()));
+  if (index === -1) return `${text.replace(/\s*$/, "")}\n\n# ${title}\n`;
+  lines[index] = `# ${title}`;
+  return lines.join("\n");
 }
 
 async function cmdInit(io: IO): Promise<number> {
@@ -226,8 +234,10 @@ async function cmdQuery(args: string[], io: IO): Promise<number> {
 }
 
 async function cmdSync(args: string[], io: IO): Promise<number> {
-  const parsed = parseOptions(args, { push: { type: "boolean" }, "dry-run": { type: "boolean" }, repo: { type: "string" } });
-  if (!parsed.values.push) return usageError(io, "sync", "--push is required");
+  const parsed = parseOptions(args, { push: { type: "boolean" }, pull: { type: "boolean" }, force: { type: "boolean" }, "dry-run": { type: "boolean" }, repo: { type: "string" } });
+  const push = Boolean(parsed.values.push);
+  const pull = Boolean(parsed.values.pull);
+  if (push === pull) return usageError(io, "sync", "Specify exactly one of --push or --pull");
   const dir = workDirOrError(io);
   if (!dir) return 1;
   const { items, issues } = await loadItemsWithIssues(dir);
@@ -242,6 +252,10 @@ async function cmdSync(args: string[], io: IO): Promise<number> {
 
   if (dryRun) {
     for (const { item, path, body } of slices) {
+      if (pull) {
+        io.stdout(item.issue ? `${item.id} would pull #${item.issue}\n` : `${item.id} no issue\n`);
+        continue;
+      }
       const hash = overlayHash(sliceIssuePayload(item, body));
       if (!item.issue) { io.stdout(`${item.id} would create\n`); continue; }
       const overlay = await readOverlay(path);
@@ -269,6 +283,27 @@ async function cmdSync(args: string[], io: IO): Promise<number> {
   for (const { item, path, body } of slices) {
     const payload = sliceIssuePayload(item, body);
     try {
+      if (pull) {
+        if (!item.issue) {
+          io.stdout(`${item.id} no issue\n`);
+          continue;
+        }
+        const overlay = await readOverlay(path);
+        const localChanged = overlay?.issue === item.issue && overlay.hash !== overlayHash(payload);
+        if (localChanged && !parsed.values.force) {
+          io.stderr(`${item.id} refused: local changes differ from last sync; use --force to overwrite\n`);
+          failed += 1;
+          continue;
+        }
+        const issue = await getIssue(config, item.issue);
+        const nextStatus = issue.state === "closed" ? "done" : "open";
+        let next = replaceFirstH1(await Bun.file(path).text(), issue.title);
+        next = rewriteScalar(next, "status", nextStatus) ?? next;
+        await writeText(path, next);
+        await writeOverlay(path, snapshot(item.issue, { title: issue.title, state: issue.state }, issue.url ?? overlay?.url));
+        io.stdout(`${item.id} pulled #${item.issue}\n`);
+        continue;
+      }
       if (item.issue) {
         const overlay = await readOverlay(path);
         if (overlay?.issue === item.issue && overlay.hash === overlayHash(payload)) {
