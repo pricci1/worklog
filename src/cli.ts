@@ -238,14 +238,16 @@ async function cmdQuery(args: string[], io: IO): Promise<number> {
 }
 
 async function cmdSync(args: string[], io: IO): Promise<number> {
-  const parsed = parseOptions(args, { push: { type: "boolean" }, pull: { type: "boolean" }, reconcile: { type: "boolean" }, force: { type: "boolean" }, "dry-run": { type: "boolean" }, repo: { type: "string" } });
+  const parsed = parseOptions(args, { push: { type: "boolean" }, pull: { type: "boolean" }, reconcile: { type: "boolean" }, persist: { type: "boolean" }, force: { type: "boolean" }, "dry-run": { type: "boolean" }, repo: { type: "string" } });
   const push = Boolean(parsed.values.push);
   const pull = Boolean(parsed.values.pull);
   const reconcile = Boolean(parsed.values.reconcile);
-  if (reconcile && (push || pull)) return usageError(io, "sync", "--reconcile cannot be combined with --push or --pull");
+  const persist = Boolean(parsed.values.persist);
+  if (reconcile && (push || pull || persist)) return usageError(io, "sync", "--reconcile cannot be combined with --push, --pull, or --persist");
+  if (persist && (push || pull)) return usageError(io, "sync", "--persist cannot be combined with --push or --pull");
   if (push && pull) return usageError(io, "sync", "Specify at most one of --push or --pull");
-  const runPull = pull || (!push && !reconcile);
-  const runPush = push || (!pull && !reconcile);
+  const runPull = pull || (!push && !reconcile && !persist);
+  const runPush = push || (!pull && !reconcile && !persist);
   const dir = workDirOrError(io);
   if (!dir) return 1;
   let { items, issues } = await loadItemsWithIssues(dir);
@@ -257,6 +259,40 @@ async function cmdSync(args: string[], io: IO): Promise<number> {
   }
   let slices = items.filter((entry): entry is typeof entry & { item: NormalizedSlice } => entry.item.kind === "slice");
   const dryRun = Boolean(parsed.values["dry-run"]);
+
+  if (persist) {
+    let failed = 0;
+    for (const { item, path, body } of slices) {
+      const overlay = await readOverlay(path);
+      if (!overlay) {
+        io.stdout(`${item.id} no overlay\n`);
+        continue;
+      }
+      if (item.issue && item.issue !== overlay.issue && !parsed.values.force) {
+        io.stderr(`${item.id} refused: local issue #${item.issue} differs from overlay #${overlay.issue}; use --force to overwrite\n`);
+        failed += 1;
+        continue;
+      }
+      const nextStatus = overlay.remote.state === "closed" ? "done" : "open";
+      const currentHash = overlayHash(sliceIssuePayload(item, body));
+      const currentIssueMatches = item.issue === overlay.issue;
+      if (currentIssueMatches && currentHash === overlay.hash) {
+        io.stdout(`${item.id} up to date #${overlay.issue}\n`);
+        continue;
+      }
+      if (dryRun) {
+        io.stdout(`${item.id} would persist #${overlay.issue}\n`);
+        continue;
+      }
+      let next = await Bun.file(path).text();
+      next = replaceFirstH1(next, overlay.remote.title);
+      next = rewriteScalar(next, "status", nextStatus) ?? next;
+      next = upsertScalar(next, "issue", String(overlay.issue)) ?? next;
+      await writeText(path, next);
+      io.stdout(`${item.id} persisted #${overlay.issue}\n`);
+    }
+    return failed === 0 ? 0 : 1;
+  }
 
   if (dryRun && !reconcile) {
     for (const { item } of slices) {

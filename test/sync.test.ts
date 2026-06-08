@@ -3,6 +3,7 @@ import { join } from "node:path";
 type Server = ReturnType<typeof Bun.serve>;
 import { parseRepoUrl, parseRepoSpec, resolveToken, sliceIssuePayload } from "../src/github";
 import { upsertScalar } from "../src/frontmatter";
+import { overlayHash } from "../src/overlay";
 import type { NormalizedSlice } from "../src/schema";
 import { put, read, run, slice, story, tempRepo } from "./helpers";
 
@@ -257,6 +258,45 @@ describe("wl sync --pull", () => {
     expect(result.code).toBe(0);
     expect(result.stdout).toContain("sl-a00001 no issue");
     expect(result.stdout).toContain("sl-b00002 would pull #9");
+  });
+});
+
+describe("wl sync --persist", () => {
+  test("writes ignored overlay state back to tracked markdown without auth or network", async () => {
+    const repo = await tempRepo();
+    await put(repo, "us-a11111-story.md", story());
+    const file = await put(repo, "sl-b22222-demo.md", slice("sl-b22222", ["us-a11111"]));
+    const remote = { title: "Remote accepted title", state: "closed" as const };
+    await Bun.write(file.replace(/\.md$/, ".json"), `${JSON.stringify({ issue: 42, repo: "octo/worklog", hash: overlayHash(remote), remote, syncedAt: new Date().toISOString() }, null, 2)}\n`);
+
+    const result = await run(repo, ["sync", "--persist"], { GITHUB_TOKEN: undefined, GH_TOKEN: undefined, PATH: "/tmp/wl-no-gh" });
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toBe("sl-b22222 persisted #42\n");
+    const text = await read(file);
+    expect(text).toContain("issue: 42");
+    expect(text).toContain("status: done");
+    expect(text).toContain("# Remote accepted title");
+  });
+
+  test("refuses to overwrite a conflicting local issue unless --force is passed", async () => {
+    const repo = await tempRepo();
+    await put(repo, "us-a11111-story.md", story());
+    const file = await put(repo, "sl-b22222-demo.md", slice("sl-b22222", ["us-a11111"]).replace("tags: [orders, telegram]", "tags: [orders, telegram]\nissue: 7"));
+    const remote = { title: "Remote accepted title", state: "open" as const };
+    await Bun.write(file.replace(/\.md$/, ".json"), `${JSON.stringify({ issue: 42, repo: "octo/worklog", hash: overlayHash(remote), remote, syncedAt: new Date().toISOString() }, null, 2)}\n`);
+
+    const refused = await run(repo, ["sync", "--persist"], { GITHUB_TOKEN: undefined, GH_TOKEN: undefined, PATH: "/tmp/wl-no-gh" });
+
+    expect(refused.code).toBe(1);
+    expect(refused.stderr).toContain("local issue #7 differs from overlay #42");
+    expect(await read(file)).toContain("issue: 7");
+
+    const forced = await run(repo, ["sync", "--persist", "--force"], { GITHUB_TOKEN: undefined, GH_TOKEN: undefined, PATH: "/tmp/wl-no-gh" });
+
+    expect(forced.code).toBe(0);
+    expect(forced.stdout).toBe("sl-b22222 persisted #42\n");
+    expect(await read(file)).toContain("issue: 42");
   });
 });
 
