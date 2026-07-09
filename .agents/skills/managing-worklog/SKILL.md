@@ -17,6 +17,8 @@ The hierarchy is `spec <- story <- slice`: stories may reference one spec, and s
 
 The frontmatter is the source of truth for querying. Mutate it only through `wl` commands.
 
+Use `wl` as the issue tracker: specs hold context, stories hold desired outcomes, and slices define the executable frontier for implementation agents.
+
 ## Discovery
 
 Always start by checking what's available; the CLI is self-documenting.
@@ -64,6 +66,140 @@ Mark progress as you go — do not edit the file:
 wl status <slice-id> doing
 wl status <slice-id> done
 ```
+
+## Workflow: synthesize a spec and stories
+
+When asked to turn a conversation, plan, or rough idea into tracked work, synthesize from the context you already have. Do not interview the user unless a missing decision would materially change scope, story boundaries, or safety.
+
+1. Explore only enough code/docs to understand the current vocabulary, existing seams, and prior work.
+2. Draft a spec that captures problem, solution, scope, decisions, testing notes, open questions, and links to related work. The spec is a context container, not executable work.
+3. Draft business-facing stories at the same time. Stories are separate `us-*` items linked to the spec; do not list full stories inside the spec body.
+4. Before publishing many items, show the user the proposed spec title plus numbered story statements and ask whether the story set is right.
+5. Create the spec and stories after approval, then link every story to the spec.
+
+```sh
+spec_id=$(wl new spec --title "Improve planning workflows" --tags planning,agents)
+story_id=$(wl new story --statement "Agents can turn a rough idea into tracked work without losing context" --tags planning,agents)
+wl link "$story_id" --spec "$spec_id"
+```
+
+After creation, it is OK to edit Markdown bodies for clarity, but never hand-edit YAML frontmatter. Keep frontmatter changes routed through `wl` commands.
+
+### Spec body shape
+
+Use the generated template and fill it with concise, stable context:
+
+```md
+# <title>
+
+## Problem Statement
+
+The user's problem, from the user's perspective.
+
+## Solution
+
+The intended solution, from the user's perspective.
+
+## Scope
+
+What this effort includes.
+
+## Out of Scope
+
+What this effort explicitly excludes.
+
+## Implementation Decisions
+
+Architecture, contracts, schema/API choices, or constraints already decided. Avoid brittle file paths unless the path itself is the decision.
+
+## Testing Decisions
+
+Highest useful verification seam, existing prior-art tests, and what behavior proves completion.
+
+## Open Questions
+
+Questions that block approval or require human input.
+
+## Related Work
+
+Links to the linked `us-*` stories or other relevant worklog items.
+
+## Further Notes
+```
+
+### Story body shape
+
+Stories capture business intent only:
+
+```md
+# <statement>
+
+## Context
+
+Who wants this and why.
+
+## Acceptance Criteria
+
+- [ ] Observable outcome, free of implementation detail.
+
+## Notes
+
+Business constraints only. Move implementation detail to slices.
+```
+
+Approve the spec only after the user agrees it is ready to guide slicing:
+
+```sh
+wl status <spec-id> approved
+```
+
+## Workflow: turn stories into tracer slices
+
+Slicing is generally a separate step from spec/story creation. When asked to break down a spec or story into work, use tracer bullets: each slice should deliver a narrow, complete, independently verifiable path through the system. Prefer a small prefactor slice first if it makes later work easier.
+
+1. Read the relevant context:
+
+   ```sh
+   wl context <spec-or-story-id>
+   ```
+
+2. Draft slices before creating them. For each proposed slice, show:
+
+   - **Title**: short implementation-facing name.
+   - **Covers**: linked story IDs.
+   - **Blocked by**: slice titles or IDs that genuinely gate it, or none.
+   - **Mode**: `AFK` if an agent can complete it autonomously, `HITL` if it needs human input/review/approval/decision.
+   - **What it delivers**: end-to-end behavior, not a layer-by-layer task list.
+
+3. Ask the user whether the granularity, dependency edges, and AFK/HITL modes are right. Do not create a batch of slices until the breakdown is approved.
+4. Create approved slices in dependency order so blockers already have IDs.
+5. Fill each slice body with enough context for a fresh agent to implement it in one context window.
+
+### Slice body shape
+
+```md
+# <title>
+
+## What to build
+
+End-to-end behavior this slice makes work.
+
+## Acceptance Criteria
+
+- [ ] Observable outcome.
+
+## Implementation Notes
+
+Only decisions, constraints, or known seams useful to the implementing agent.
+
+## Verification
+
+- [ ] Command or manual check that proves the slice works.
+
+## Out of Scope
+```
+
+For wide mechanical refactors that cannot land as vertical slices, use expand-contract sequencing: add the new form beside the old, migrate bounded batches while keeping the repo green, then remove the old form after all callers move.
 
 ## Creating work
 
