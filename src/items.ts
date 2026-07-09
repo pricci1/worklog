@@ -20,7 +20,9 @@ function issue(input: { file: string; id?: string | undefined; problem: string; 
 }
 
 function kindRank(item: NormalizedItem): number {
-  return item.kind === "story" ? 0 : 1;
+  if (item.kind === "spec") return 0;
+  if (item.kind === "story") return 1;
+  return 2;
 }
 
 export function sortItems<T extends NormalizedItem>(items: T[]): T[] {
@@ -60,7 +62,11 @@ export async function loadItemsWithIssues(workDir: string): Promise<{ items: Loa
     if (duplicate) issues.push({ file, id: frontmatterId, problem: `duplicate id also in ${duplicate}` });
     seen.set(frontmatterId, file);
 
-    if (result.data.kind === "story") {
+    if (result.data.kind === "spec") {
+      const firstLine = parsed.body.split("\n")[0] ?? "";
+      if (firstLine !== `# ${result.data.title}`) issues.push({ file, id: frontmatterId, problem: "spec H1 does not match title", warning: true });
+      raw.push({ parsed: { item: { ...result.data, file: displayFile(workDir, file) }, path: file, body: parsed.body, text }, depends: [] });
+    } else if (result.data.kind === "story") {
       const firstLine = parsed.body.split("\n")[0] ?? "";
       if (firstLine !== `# ${result.data.statement}`) issues.push({ file, id: frontmatterId, problem: "story H1 does not match statement", warning: true });
       raw.push({ parsed: { item: { ...result.data, file: displayFile(workDir, file) }, path: file, body: parsed.body, text }, depends: [] });
@@ -70,13 +76,32 @@ export async function loadItemsWithIssues(workDir: string): Promise<{ items: Loa
   }
 
   const byId = new Map(raw.map(({ parsed }) => [parsed.item.id, parsed.item]));
+  const storyCountBySpec = new Map<string, number>();
   for (const { parsed } of raw) {
+    if (parsed.item.kind === "story") {
+      if (parsed.item.spec) {
+        if (byId.get(parsed.item.spec)?.kind !== "spec") issues.push({ file: parsed.path, id: parsed.item.id, problem: `spec missing ${parsed.item.spec}` });
+        storyCountBySpec.set(parsed.item.spec, (storyCountBySpec.get(parsed.item.spec) ?? 0) + 1);
+      } else if (parsed.item.status === "active") {
+        issues.push({ file: parsed.path, id: parsed.item.id, problem: "active story has no spec", warning: true });
+      }
+      continue;
+    }
     if (parsed.item.kind !== "slice") continue;
     for (const storyId of parsed.item.covers) {
       if (byId.get(storyId)?.kind !== "story") issues.push({ file: parsed.path, id: parsed.item.id, problem: `covers missing story ${storyId}` });
     }
     for (const sliceId of parsed.item.depends_on) {
       if (byId.get(sliceId)?.kind !== "slice") issues.push({ file: parsed.path, id: parsed.item.id, problem: `depends_on missing slice ${sliceId}` });
+    }
+  }
+
+  for (const { parsed } of raw) {
+    if (parsed.item.kind !== "spec") continue;
+    if (parsed.item.status === "approved" && !storyCountBySpec.has(parsed.item.id)) issues.push({ file: parsed.path, id: parsed.item.id, problem: "approved spec has no linked stories", warning: true });
+    if (parsed.item.status === "archived") {
+      const activeStories = raw.filter((entry) => entry.parsed.item.kind === "story" && entry.parsed.item.spec === parsed.item.id && entry.parsed.item.status === "active").map((entry) => entry.parsed.item.id);
+      if (activeStories.length > 0) issues.push({ file: parsed.path, id: parsed.item.id, problem: `archived spec has active stories: ${activeStories.join(", ")}`, warning: true });
     }
   }
 

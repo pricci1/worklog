@@ -1,17 +1,30 @@
 import { describe, expect, test } from "bun:test";
 import { loadItems, loadItemsWithIssues } from "../src/items";
-import { put, slice, story, tempRepo } from "./helpers";
+import { put, slice, spec, story, tempRepo } from "./helpers";
 
 describe("item loading", () => {
-  test("parses discriminated story and slice items and sorts stories first", async () => {
+  test("parses discriminated items and sorts specs, stories, then slices", async () => {
     const repo = await tempRepo();
     await put(repo, "sl-b22222-demo.md", slice());
     await put(repo, "us-a11111-story.md", story());
+    await put(repo, "sp-d44444-spec.md", spec());
 
     const items = (await loadItems(`${repo}/.work`)).map((entry) => entry.item);
 
-    expect(items.map((item) => item.id)).toEqual(["us-a11111", "sl-b22222"]);
-    expect(items[1]).toMatchObject({ kind: "slice", ready: true, blocked: false });
+    expect(items.map((item) => item.id)).toEqual(["sp-d44444", "us-a11111", "sl-b22222"]);
+    expect(items[2]).toMatchObject({ kind: "slice", ready: true, blocked: false });
+  });
+
+  test("validates story spec references and spec lifecycle warnings", async () => {
+    const repo = await tempRepo();
+    await put(repo, "sp-d44444-spec.md", spec().replace("status: draft", "status: archived"));
+    await put(repo, "us-a11111-story.md", story().replace("tags: [orders]", "spec: sp-d44444\ntags: [orders]"));
+    await put(repo, "us-c33333-missing.md", story("us-c33333", "Missing parent").replace("tags: [orders]", "spec: sp-e55555\ntags: [orders]"));
+
+    const { issues } = await loadItemsWithIssues(`${repo}/.work`);
+
+    expect(issues.some((issue) => !issue.warning && issue.problem === "spec missing sp-e55555")).toBe(true);
+    expect(issues.some((issue) => issue.warning && issue.problem.includes("archived spec has active stories"))).toBe(true);
   });
 
   test("rejects unknown frontmatter fields through strict schemas", async () => {

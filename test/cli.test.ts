@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { put, read, run, slice, story, tempRepo } from "./helpers";
+import { put, read, run, slice, spec, story, tempRepo } from "./helpers";
 
 describe("CLI creation and read commands", () => {
   test("init is idempotent and new story creates a slugged markdown file", async () => {
@@ -26,6 +26,18 @@ describe("CLI creation and read commands", () => {
     expect(created.code).toBe(0);
     expect(data[0]).toMatchObject({ id: "us-a11111", kind: "story", file: ".work/us-a11111-story.md" });
     expect(data[1]).toMatchObject({ kind: "slice", status: "open", mode: "AFK", covers: ["us-a11111"], ready: true, blocked: false });
+  });
+
+  test("new spec creates a draft context document", async () => {
+    const repo = await tempRepo();
+
+    const created = await run(repo, ["new", "spec", "--title", "Plan notifications", "--tags", "orders, planning"]);
+    const data = JSON.parse((await run(repo, ["list", "--kind", "spec", "--json"])).stdout);
+
+    expect(created.code).toBe(0);
+    expect(created.stdout).toMatch(/^sp-[0-9a-f]{6}\n$/);
+    expect(data[0]).toMatchObject({ kind: "spec", status: "draft", title: "Plan notifications", tags: ["orders", "planning"] });
+    expect((await run(repo, ["show", data[0].id])).stdout).toContain("## Implementation Decisions");
   });
 
   test("show resolves bare suffixes and reports ambiguous suffixes", async () => {
@@ -81,6 +93,25 @@ describe("CLI mutation commands", () => {
     expect(await read(file)).toContain("implementation detail");
   });
 
+  test("story-to-spec links drive stories and context output", async () => {
+    const repo = await tempRepo();
+    const storyFile = await put(repo, "us-a11111-story.md", story());
+    await put(repo, "sp-d44444-spec.md", spec());
+    await put(repo, "sl-b22222-demo.md", slice());
+
+    expect((await run(repo, ["link", "us-a11111", "--spec", "sp-d44444"])).code).toBe(0);
+    expect(await read(storyFile)).toContain("spec: sp-d44444");
+    expect((await run(repo, ["stories", "--spec", "sp-d44444"])).stdout).toContain("us-a11111\tstory\tactive\tReceive order notifications");
+    const context = await run(repo, ["context", "sp-d44444"]);
+    expect(context.stdout).toContain("## Specs");
+    expect(context.stdout).toContain("# Notification workflow");
+    expect(context.stdout).toContain("# Receive order notifications");
+    expect(context.stdout).toContain("# Slice sl-b22222");
+
+    expect((await run(repo, ["unlink", "us-a11111", "--spec", "sp-d44444"])).code).toBe(0);
+    expect(await read(storyFile)).not.toContain("spec: sp-d44444");
+  });
+
   test("link rejects self-dependencies and dependency cycles", async () => {
     const repo = await tempRepo();
     await put(repo, "us-a11111-story.md", story());
@@ -94,12 +125,16 @@ describe("CLI mutation commands", () => {
   test("validation errors return exit code 1", async () => {
     const repo = await tempRepo();
     await put(repo, "us-a11111-story.md", story());
+    await put(repo, "sp-d44444-spec.md", spec());
     await put(repo, "sl-b22222-demo.md", slice());
 
     expect((await run(repo, ["new", "story"])).code).toBe(1);
     expect((await run(repo, ["new", "slice", "--title", "Bad", "--mode", "AFK", "--covers", "us-c33333"])).code).toBe(1);
     expect((await run(repo, ["status", "us-a11111", "done"])).code).toBe(1);
+    expect((await run(repo, ["status", "sp-d44444", "approved"])).code).toBe(0);
+    expect((await run(repo, ["status", "sp-d44444", "done"])).code).toBe(1);
     expect((await run(repo, ["mode", "us-a11111", "AFK"])).code).toBe(1);
+    expect((await run(repo, ["link", "sl-b22222", "--spec", "sp-d44444"])).code).toBe(1);
   });
 });
 
@@ -205,12 +240,14 @@ describe("help and version", () => {
     const newHelp = await run(repo, ["new", "--help"]);
     expect(newHelp.code).toBe(0);
     expect(newHelp.stdout).toContain("wl new story");
+    expect(newHelp.stdout).toContain("wl new spec");
     expect(newHelp.stdout).toContain("wl new slice");
     expect(newHelp.stdout).toContain("--mode AFK|HITL");
 
     const linkHelp = await run(repo, ["help", "link"]);
     expect(linkHelp.code).toBe(0);
     expect(linkHelp.stdout).toContain("wl link <slice-id> --covers <us-id>");
+    expect(linkHelp.stdout).toContain("wl link <story-id> --spec <sp-id>");
   });
 
   test("unknown command lists known commands and exits 1", async () => {

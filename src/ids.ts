@@ -1,7 +1,7 @@
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 
-export type IdPrefix = "us" | "sl";
+export type IdPrefix = "sp" | "us" | "sl";
 
 export function randomId(prefix: IdPrefix): string {
   const bytes = new Uint8Array(3);
@@ -14,7 +14,7 @@ export async function allocateId(prefix: IdPrefix, dir: string): Promise<string>
   const existing = new Set<string>();
   try {
     for (const name of await readdir(dir)) {
-      const match = /^(us|sl)-[0-9a-f]{6}/.exec(name);
+      const match = /^(sp|us|sl)-[0-9a-f]{6}/.exec(name);
       if (match?.[0]) existing.add(match[0]);
     }
   } catch {
@@ -27,7 +27,7 @@ export async function allocateId(prefix: IdPrefix, dir: string): Promise<string>
 }
 
 export function idFromFilename(name: string): string | undefined {
-  return /^(us|sl)-[0-9a-f]{6}(?=-)/.exec(name)?.[0];
+  return /^(sp|us|sl)-[0-9a-f]{6}(?=-)/.exec(name)?.[0];
 }
 
 export function itemPath(dir: string, id: string, slug: string): string {

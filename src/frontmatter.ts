@@ -36,6 +36,36 @@ function array(values: readonly string[]): string {
   return `[${values.join(", ")}]`;
 }
 
+export function serializeSpec(input: { id: string; title: string; tags: readonly string[] }): string {
+  return [
+    "---",
+    `id: ${input.id}`,
+    "kind: spec",
+    "status: draft",
+    `title: ${scalar(input.title)}`,
+    `tags: ${array(input.tags)}`,
+    "---",
+    `# ${input.title}`,
+    "",
+    "## Problem Statement",
+    "",
+    "## Solution",
+    "",
+    "## Scope",
+    "",
+    "## Out of Scope",
+    "",
+    "## Implementation Decisions",
+    "",
+    "## Testing Decisions",
+    "",
+    "## Open Questions",
+    "",
+    "## Further Notes",
+    "",
+  ].join("\n");
+}
+
 export function serializeStory(input: { id: string; statement: string; tags: readonly string[] }): string {
   return [
     "---",
@@ -97,6 +127,19 @@ export function upsertScalar(text: string, key: string, value: string): string |
   const lines = text.split("\n");
   lines.splice(parsed.endLine, 0, `${key}: ${value}`);
   return lines.join("\n");
+}
+
+export function removeScalar(text: string, key: string): string | undefined {
+  const parsed = parseFrontmatter(text);
+  if (!parsed) return undefined;
+  const lines = text.split("\n");
+  for (let index = 1; index < parsed.endLine; index += 1) {
+    if (lines[index]?.match(new RegExp(`^${key}:`))) {
+      lines.splice(index, 1);
+      return lines.join("\n");
+    }
+  }
+  return text;
 }
 
 export function rewriteList(text: string, key: string, values: readonly string[]): string | undefined {

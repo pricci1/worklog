@@ -18,15 +18,16 @@ const COMMANDS: readonly CommandSpec[] = [
   {
     name: "new",
     usage: [
+      "wl new spec --title <text> [--tags a,b,c]",
       "wl new story --statement <text> [--tags a,b,c]",
       "wl new slice --title <text> --mode AFK|HITL --covers <us-id[,...]>",
       "             [--depends-on <sl-id[,...]>] [--tags a,b,c]",
     ],
-    summary: "Create a new User Story or Tracer Slice. Prints the new ID.",
+    summary: "Create a new Spec, User Story, or Tracer Slice. Prints the new ID.",
     details: [
       "OPTIONS",
+      "  --title <text>       Spec title or slice title (required, non-empty).",
       "  --statement <text>   Story statement (story only; required, non-empty).",
-      "  --title <text>       Slice title (slice only; required, non-empty).",
       "  --mode AFK|HITL      AFK = autonomous; HITL = needs human input (slice only).",
       "  --covers <ids>       Comma-separated story IDs the slice covers (>=1).",
       "  --depends-on <ids>   Comma-separated slice IDs this slice depends on.",
@@ -35,7 +36,7 @@ const COMMANDS: readonly CommandSpec[] = [
   },
   {
     name: "list",
-    usage: ["wl list [--kind story|slice] [--status <value>] [--tag <tag>] [--mode AFK|HITL] [--json]"],
+    usage: ["wl list [--kind spec|story|slice] [--status <value>] [--tag <tag>] [--mode AFK|HITL] [--json]"],
     summary: "List items. Filters are AND-combined. Default output is a tab-separated table.",
   },
   {
@@ -56,7 +57,7 @@ const COMMANDS: readonly CommandSpec[] = [
   {
     name: "status",
     usage: ["wl status <id> <status>"],
-    summary: "Set status. Story: active|future|dropped. Slice: open|doing|done|dropped.",
+    summary: "Set status. Spec: draft|approved|archived. Story: active|future|dropped. Slice: open|doing|done|dropped.",
     details: ["Rewrites the status: line in place; preserves all other content."],
   },
   {
@@ -69,8 +70,9 @@ const COMMANDS: readonly CommandSpec[] = [
     usage: [
       "wl link <slice-id> --covers <us-id>",
       "wl link <slice-id> --depends-on <sl-id>",
+      "wl link <story-id> --spec <sp-id>",
     ],
-    summary: "Add a covers or depends-on link to a slice. No-op if the ref is already present.",
+    summary: "Add a covers, depends-on, or story-to-spec link. No-op if already present.",
     details: ["Rejects self-dependency and cycles in depends_on."],
   },
   {
@@ -78,8 +80,19 @@ const COMMANDS: readonly CommandSpec[] = [
     usage: [
       "wl unlink <slice-id> --covers <us-id>",
       "wl unlink <slice-id> --depends-on <sl-id>",
+      "wl unlink <story-id> --spec <sp-id>",
     ],
-    summary: "Remove a covers or depends-on link from a slice. No-op if the ref is absent.",
+    summary: "Remove a covers, depends-on, or story-to-spec link. No-op if absent.",
+  },
+  {
+    name: "stories",
+    usage: ["wl stories --spec <sp-id> [--json]"],
+    summary: "List stories linked to a spec.",
+  },
+  {
+    name: "context",
+    usage: ["wl context <id>"],
+    summary: "Print a context bundle: specs, linked stories, and covering slices.",
   },
   {
     name: "ready",
@@ -149,7 +162,7 @@ export function commandNames(): readonly string[] {
 
 export function mainHelp(): string {
   const lines = [
-    `wl ${VERSION} — Git-native CLI for User Stories (us-…) and Tracer Slices (sl-…).`,
+    `wl ${VERSION} — Git-native CLI for Specs (sp-…), User Stories (us-…), and Tracer Slices (sl-…).`,
     "",
     "USAGE",
     "  wl <command> [options]",
@@ -169,6 +182,7 @@ export function mainHelp(): string {
     "  GITHUB_API_URL     GitHub API base URL (default: https://api.github.com).",
     "",
     "ITEM KINDS",
+    "  spec  (sp-…)   Context container for intent, scope, decisions, and open questions.",
     "  story (us-…)   Business-facing intent. No implementation details.",
     "  slice (sl-…)   Tracer bullet. Covers ≥1 story; may depend on other slices.",
     "",

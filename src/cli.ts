@@ -3,11 +3,11 @@ import { mkdir } from "node:fs/promises";
 import { resolveWorkDir, initWorkDir, writeText } from "./fs";
 import { allocateId, itemPath } from "./ids";
 import { slugify } from "./slug";
-import { serializeStory, serializeSlice, rewriteScalar, rewriteList, upsertScalar } from "./frontmatter";
+import { serializeSpec, serializeStory, serializeSlice, rewriteScalar, rewriteList, upsertScalar, removeScalar } from "./frontmatter";
 import { loadItems, loadItemsWithIssues, resolveItem, sortItems, unresolvedDependencies, findCycles } from "./items";
 import { apiBase, createIssue, getIssue, listWorklogSliceIssues, parseRepoSpec, resolveRepo, resolveToken, sliceIssuePayload, updateIssue, type GithubConfig, type ReconcileIssue } from "./github";
 import { ensureOverlayGitignore, overlayHash, readOverlay, writeOverlay, type Overlay } from "./overlay";
-import { Mode, SliceStatus, StoryStatus, type NormalizedItem, type NormalizedSlice } from "./schema";
+import { Mode, SliceStatus, SpecStatus, StoryStatus, type NormalizedItem, type NormalizedSlice } from "./schema";
 import { commandHelp, commandNames, mainHelp, usageLine, VERSION } from "./help";
 
 type IO = { stdout: (text: string) => void; stderr: (text: string) => void; cwd: string; env: Record<string, string | undefined> };
@@ -36,7 +36,12 @@ function json(items: readonly NormalizedItem[]): string {
 
 function table(items: readonly NormalizedItem[]): string {
   if (items.length === 0) return "";
-  return `${items.map((item) => [item.id, item.kind, item.status, item.kind === "slice" ? item.mode : "", item.kind === "story" ? item.statement : item.file].filter(Boolean).join("\t")).join("\n")}\n`;
+  return `${items.map((item) => [item.id, item.kind, item.status, item.kind === "slice" ? item.mode : "", item.kind === "spec" ? item.title : item.kind === "story" ? item.statement : item.file].filter(Boolean).join("\t")).join("\n")}\n`;
+}
+
+function section(title: string, entries: readonly { item: NormalizedItem; text: string }[]): string {
+  if (entries.length === 0) return "";
+  return [`## ${title}`, "", ...entries.map((entry) => entry.text.trimEnd()).join("\n\n---\n\n").split("\n"), ""].join("\n");
 }
 
 function parseOptions(args: string[], options: Record<string, { type: "string" | "boolean"; multiple?: boolean }>) {
@@ -75,6 +80,15 @@ async function cmdNew(args: string[], io: IO): Promise<number> {
   const workDir = workDirOrError(io);
   if (!workDir) return 1;
   await mkdir(workDir, { recursive: true });
+  if (sub === "spec") {
+    const parsed = parseOptions(args.slice(1), { title: { type: "string" }, tags: { type: "string" } });
+    const title = String(parsed.values.title ?? "").trim();
+    if (!title) return usageError(io, "new", "--title is required and must be non-empty");
+    const id = await allocateId("sp", workDir);
+    await writeText(itemPath(workDir, id, slugify(title)), serializeSpec({ id, title, tags: parseCsv(stringValue(parsed.values.tags)) }));
+    io.stdout(`${id}\n`);
+    return 0;
+  }
   if (sub === "story") {
     const parsed = parseOptions(args.slice(1), { statement: { type: "string" }, tags: { type: "string" } });
     const statement = String(parsed.values.statement ?? "").trim();
@@ -102,7 +116,7 @@ async function cmdNew(args: string[], io: IO): Promise<number> {
     io.stdout(`${id}\n`);
     return 0;
   }
-  return usageError(io, "new", sub ? `Unknown kind: ${sub} (expected story or slice)` : "Specify story or slice");
+  return usageError(io, "new", sub ? `Unknown kind: ${sub} (expected spec, story, or slice)` : "Specify spec, story, or slice");
 }
 
 async function filteredItems(args: string[], io: IO): Promise<{ items: NormalizedItem[]; json: boolean } | undefined> {
@@ -153,7 +167,7 @@ async function cmdStatus(args: string[], io: IO): Promise<number> {
   const [id, status] = args;
   if (!id || !status) return usageError(io, "status", "<id> and <status> are required");
   return await mutateResolved(id, io, (entry) => {
-    const ok = entry.item.kind === "story" ? StoryStatus.safeParse(status).success : SliceStatus.safeParse(status).success;
+    const ok = entry.item.kind === "spec" ? SpecStatus.safeParse(status).success : entry.item.kind === "story" ? StoryStatus.safeParse(status).success : SliceStatus.safeParse(status).success;
     if (!ok) { io.stderr(`Invalid status for ${entry.item.kind}: ${status}\n`); return undefined; }
     const next = rewriteScalar(entry.text, "status", status);
     if (!next) io.stderr("Missing status line\n");
@@ -176,20 +190,32 @@ async function cmdMode(args: string[], io: IO): Promise<number> {
 
 async function cmdLink(args: string[], io: IO, link: boolean): Promise<number> {
   const name = link ? "link" : "unlink";
-  const sliceId = args[0];
-  if (!sliceId) return usageError(io, name, "<slice-id> is required");
-  const parsed = parseOptions(args.slice(1), { covers: { type: "string" }, "depends-on": { type: "string" } });
+  const itemId = args[0];
+  if (!itemId) return usageError(io, name, "<id> is required");
+  const parsed = parseOptions(args.slice(1), { covers: { type: "string" }, "depends-on": { type: "string" }, spec: { type: "string" } });
   const covers = parsed.values.covers;
   const dependsOn = parsed.values["depends-on"];
-  const key = covers ? "covers" : dependsOn ? "depends_on" : undefined;
-  const ref = String(covers ?? dependsOn ?? "");
+  const spec = parsed.values.spec;
+  const present = [covers, dependsOn, spec].filter((value) => value !== undefined);
+  const key = covers ? "covers" : dependsOn ? "depends_on" : spec ? "spec" : undefined;
+  const ref = String(covers ?? dependsOn ?? spec ?? "");
   const dir = workDirOrError(io);
   if (!dir) return 1;
-  if (!key || !ref) return usageError(io, name, "Provide exactly one of --covers <us-id> or --depends-on <sl-id>");
+  if (!key || !ref || present.length !== 1) return usageError(io, name, "Provide exactly one of --covers <us-id>, --depends-on <sl-id>, or --spec <sp-id>");
   const loaded = await loadItems(dir);
-  const target = resolveItem(sliceId, loaded);
-  if (!target || "candidates" in target || target.item.kind !== "slice") { io.stderr(`Slice not found: ${sliceId}\n`); return 1; }
+  const target = resolveItem(itemId, loaded);
+  if (!target || "candidates" in target) { io.stderr(`Item not found or ambiguous: ${itemId}\n`); return 1; }
   const byId = new Map(loaded.map((entry) => [entry.item.id, entry.item]));
+  if (key === "spec") {
+    if (target.item.kind !== "story") { io.stderr("spec links apply only to stories\n"); return 1; }
+    if (byId.get(ref)?.kind !== "spec") { io.stderr(`Spec not found: ${ref}\n`); return 1; }
+    if (!link && target.item.spec !== ref) return 0;
+    const next = link ? upsertScalar(target.text, "spec", ref) : removeScalar(target.text, "spec");
+    if (!next) { io.stderr("Missing or invalid frontmatter\n"); return 1; }
+    await writeText(target.path, next);
+    return 0;
+  }
+  if (target.item.kind !== "slice") { io.stderr(`Slice not found: ${itemId}\n`); return 1; }
   if (key === "covers" && byId.get(ref)?.kind !== "story") { io.stderr(`Story not found: ${ref}\n`); return 1; }
   if (key === "depends_on" && byId.get(ref)?.kind !== "slice") { io.stderr(`Slice not found: ${ref}\n`); return 1; }
   if (key === "depends_on" && ref === target.item.id) { io.stderr("Self-dependency is not allowed\n"); return 1; }
@@ -202,6 +228,55 @@ async function cmdLink(args: string[], io: IO, link: boolean): Promise<number> {
   const next = rewriteList(target.text, key, nextValues);
   if (!next) { io.stderr(`Missing ${key} line\n`); return 1; }
   await writeText(target.path, next);
+  return 0;
+}
+
+async function cmdStories(args: string[], io: IO): Promise<number> {
+  const dir = workDirOrError(io);
+  if (!dir) return 1;
+  const parsed = parseOptions(args, { spec: { type: "string" }, json: { type: "boolean" } });
+  const specId = stringValue(parsed.values.spec);
+  if (!specId) return usageError(io, "stories", "--spec <sp-id> is required");
+  const loaded = await loadItems(dir);
+  if (loaded.find((entry) => entry.item.id === specId)?.item.kind !== "spec") { io.stderr(`Spec not found: ${specId}\n`); return 1; }
+  const stories = sortItems(loaded.map((entry) => entry.item).filter((item) => item.kind === "story" && item.spec === specId));
+  io.stdout(parsed.values.json ? json(stories) : table(stories));
+  return 0;
+}
+
+async function cmdContext(args: string[], io: IO): Promise<number> {
+  const dir = workDirOrError(io);
+  if (!dir) return 1;
+  const id = args[0];
+  if (!id) return usageError(io, "context", "<id> is required");
+  const loaded = await loadItems(dir);
+  const resolved = resolveItem(id, loaded);
+  if (!resolved) { io.stderr(`Item not found: ${id}\n`); return 1; }
+  if ("candidates" in resolved) { io.stderr(`Ambiguous id ${id}: ${resolved.candidates.map((entry) => entry.item.id).join(", ")}\n`); return 1; }
+  const entriesById = new Map(loaded.map((entry) => [entry.item.id, entry]));
+  const storyIds = new Set<string>();
+  const specIds = new Set<string>();
+  const sliceIds = new Set<string>();
+  if (resolved.item.kind === "spec") {
+    specIds.add(resolved.item.id);
+    for (const entry of loaded) if (entry.item.kind === "story" && entry.item.spec === resolved.item.id) storyIds.add(entry.item.id);
+    for (const entry of loaded) if (entry.item.kind === "slice" && entry.item.covers.some((storyId) => storyIds.has(storyId))) sliceIds.add(entry.item.id);
+  } else if (resolved.item.kind === "story") {
+    storyIds.add(resolved.item.id);
+    if (resolved.item.spec) specIds.add(resolved.item.spec);
+    for (const entry of loaded) if (entry.item.kind === "slice" && entry.item.covers.includes(resolved.item.id)) sliceIds.add(entry.item.id);
+  } else {
+    sliceIds.add(resolved.item.id);
+    for (const storyId of resolved.item.covers) {
+      storyIds.add(storyId);
+      const story = entriesById.get(storyId)?.item;
+      if (story?.kind === "story" && story.spec) specIds.add(story.spec);
+    }
+  }
+  const specs = sortItems([...specIds].map((id) => entriesById.get(id)).filter((entry): entry is NonNullable<typeof entry> => Boolean(entry)).map((entry) => entry.item)).map((item) => entriesById.get(item.id)!);
+  const stories = sortItems([...storyIds].map((id) => entriesById.get(id)).filter((entry): entry is NonNullable<typeof entry> => Boolean(entry)).map((entry) => entry.item)).map((item) => entriesById.get(item.id)!);
+  const slices = sortItems([...sliceIds].map((id) => entriesById.get(id)).filter((entry): entry is NonNullable<typeof entry> => Boolean(entry)).map((entry) => entry.item)).map((item) => entriesById.get(item.id)!);
+  io.stdout([section("Specs", specs), section("Stories", stories), section("Slices", slices)].filter(Boolean).join("\n"));
   return 0;
 }
 
@@ -471,6 +546,8 @@ export async function cli(argv = Bun.argv.slice(2), io: IO = defaultIO): Promise
       case "mode": return await cmdMode(args, io);
       case "link": return await cmdLink(args, io, true);
       case "unlink": return await cmdLink(args, io, false);
+      case "stories": return await cmdStories(args, io);
+      case "context": return await cmdContext(args, io);
       case "ready": return await cmdReadyBlocked(args, io, false);
       case "blocked": return await cmdReadyBlocked(args, io, true);
       case "query": return await cmdQuery(args, io);

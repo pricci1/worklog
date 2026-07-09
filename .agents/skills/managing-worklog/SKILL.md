@@ -1,16 +1,19 @@
 ---
 name: managing-worklog
-description: Manages User Stories and Tracer Slices stored under .work/ via the wl CLI. Use when planning, inspecting, picking up, updating, linking, or validating work items in a repository that uses wl. Never hand-edit frontmatter — use wl commands so key order and body are preserved.
+description: Manages Specs, User Stories, and Tracer Slices stored under .work/ via the wl CLI. Use when planning, inspecting, picking up, updating, linking, or validating work items in a repository that uses wl. Never hand-edit frontmatter — use wl commands so key order and body are preserved.
 ---
 
 # Managing Worklog
 
 This repo tracks work as Markdown files with YAML frontmatter under `.work/`, managed by the `wl` CLI.
 
-Two kinds of items exist:
+Three kinds of items exist:
 
+- **Spec** (`sp-xxxxxx`): context container for intent, scope, decisions, and open questions. Not executable work.
 - **Story** (`us-xxxxxx`): business-facing intent. No implementation details.
 - **Slice** (`sl-xxxxxx`): a tracer bullet of work. Covers ≥1 story, may depend on other slices.
+
+The hierarchy is `spec <- story <- slice`: stories may reference one spec, and slices cover stories. Slices do not cover specs directly.
 
 The frontmatter is the source of truth for querying. Mutate it only through `wl` commands.
 
@@ -27,10 +30,13 @@ To inspect existing work:
 
 ```sh
 wl list                   # all items, tab-separated
+wl list --kind spec
 wl list --kind story
 wl list --kind slice --status open --mode AFK
 wl show <id>              # full markdown
 wl show <id> --json       # normalized object (includes computed ready/blocked for slices)
+wl stories --spec <sp-id> # stories linked to a spec
+wl context <id>           # specs + linked stories + covering slices
 wl ready                  # slices ready to start (open + all deps done)
 wl blocked                # slices blocked, with their unresolved deps
 ```
@@ -49,8 +55,7 @@ wl ready --mode HITL --json  # slices needing human input
 Show a candidate's full context before starting:
 
 ```sh
-wl show <slice-id>
-for story in $(wl show <slice-id> --json | jq -r '.covers[]'); do wl show "$story"; done
+wl context <slice-id>
 ```
 
 Mark progress as you go — do not edit the file:
@@ -61,6 +66,12 @@ wl status <slice-id> done
 ```
 
 ## Creating work
+
+Specs capture synthesized intent, scope, decisions, testing notes, and open questions. They are context containers, not work items:
+
+```sh
+wl new spec --title "Improve planning workflows" --tags planning,agents
+```
 
 Stories capture business intent only — no implementation language:
 
@@ -93,11 +104,15 @@ Always go through commands so the frontmatter stays canonical:
 ```sh
 wl status <id> <value>          # story: active|future|dropped ; slice: open|doing|done|dropped
 wl mode <slice-id> AFK|HITL
+wl link <story-id> --spec <sp-id>             # set a story's parent spec
 wl link <slice-id> --covers <us-id>          # add a covered story
 wl link <slice-id> --depends-on <sl-id>      # add a dependency
+wl unlink <story-id> --spec <sp-id>
 wl unlink <slice-id> --covers <us-id>
 wl unlink <slice-id> --depends-on <sl-id>
 ```
+
+Spec statuses are `draft|approved|archived`. Stories use `active|future|dropped`; slices use `open|doing|done|dropped`.
 
 `link`/`unlink` reject self-dependencies and cycles. They are no-ops if the ref is already present/absent.
 
@@ -109,6 +124,7 @@ wl unlink <slice-id> --depends-on <sl-id>
 
 ```sh
 wl query
+wl query '.[] | select(.kind == "spec" and .status == "approved")'
 wl query '.[] | select(.kind == "story" and .status == "active")'
 wl query '.[] | select(.kind == "slice" and .ready) | .id'
 wl query '[.[] | select(.kind == "slice")] | group_by(.status) | map({status: .[0].status, count: length})'
@@ -141,8 +157,13 @@ Run `wl lint` before any commit that touches `.work/`. It checks:
 - Frontmatter parses and matches the Zod schema for its kind.
 - IDs are well-formed and unique.
 - Filename starts with the frontmatter id.
+- Story `spec` references an existing spec.
 - Slice `covers` references existing stories; `depends_on` references existing slices.
 - No `depends_on` cycles.
+- Spec title matches H1 (warning).
+- Active story has a spec (warning).
+- Approved spec has at least one linked story (warning).
+- Archived spec has no active stories (warning).
 - Story has a `statement`; H1 matches it (warning).
 
 Exit code 1 means there is at least one error. Fix the underlying file (or, for status/mode/links, use the corresponding `wl` command) and rerun.
@@ -151,13 +172,14 @@ Exit code 1 means there is at least one error. Fix the underlying file (or, for 
 
 - Data → stdout. Errors and warnings → stderr.
 - `0` success, `1` validation/usage error, `2` internal error.
-- `--json` is available on `list`, `show`, `ready`, `blocked`. `query` is always JSON.
+- `--json` is available on `list`, `show`, `stories`, `ready`, `blocked`. `query` is always JSON.
 
 Parse stdout in scripts; never scrape stderr.
 
 ## What not to do
 
 - Do not hand-edit YAML frontmatter (key order and surrounding lines are preserved by `wl`; manual edits risk breaking the format).
+- Do not treat specs as executable work. Use specs for context and decisions; use slices for implementation.
 - Do not put implementation details in a story. Move them into a slice that covers the story.
 - Do not invent IDs. Always use `wl new` and read the printed id from stdout.
 - Do not set `ready` or `blocked` in a file. They are computed.

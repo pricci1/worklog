@@ -27,6 +27,36 @@ export function story(id = "us-a11111", statement = "Receive order notifications
   ].join("\n");
 }
 
+export function spec(id = "sp-d44444", title = "Notification workflow"): string {
+  return [
+    "---",
+    `id: ${id}`,
+    "kind: spec",
+    "status: draft",
+    `title: ${JSON.stringify(title)}`,
+    "tags: [orders]",
+    "---",
+    `# ${title}`,
+    "",
+    "## Problem Statement",
+    "",
+    "## Solution",
+    "",
+    "## Scope",
+    "",
+    "## Out of Scope",
+    "",
+    "## Implementation Decisions",
+    "",
+    "## Testing Decisions",
+    "",
+    "## Open Questions",
+    "",
+    "## Further Notes",
+    "",
+  ].join("\n");
+}
+
 export function slice(id = "sl-b22222", covers = ["us-a11111"], depends_on: string[] = [], status = "open"): string {
   return [
     "---",
