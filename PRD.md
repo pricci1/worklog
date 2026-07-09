@@ -120,9 +120,13 @@ Template body:
 ```md
 # {{statement}}
 
-## Acceptance
+## Context
 
--
+## Acceptance Criteria
+
+- [ ]
+
+## Notes
 ```
 
 ### Slice
@@ -154,11 +158,19 @@ Template body:
 ```md
 # {{title}}
 
-## Goal
+## What to build
+
+## Acceptance Criteria
+
+- [ ]
+
+## Implementation Notes
 
 ## Verification
 
--
+- [ ]
+
+## Out of Scope
 ```
 
 ## Statuses

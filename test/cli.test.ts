@@ -26,6 +26,11 @@ describe("CLI creation and read commands", () => {
     expect(created.code).toBe(0);
     expect(data[0]).toMatchObject({ id: "us-a11111", kind: "story", file: ".work/us-a11111-story.md" });
     expect(data[1]).toMatchObject({ kind: "slice", status: "open", mode: "AFK", covers: ["us-a11111"], ready: true, blocked: false });
+    const body = (await run(repo, ["show", data[1].id])).stdout;
+    expect(body).toContain("## What to build");
+    expect(body).toContain("## Acceptance Criteria");
+    expect(body).toContain("## Implementation Notes");
+    expect(body).toContain("## Out of Scope");
   });
 
   test("new spec creates a draft context document", async () => {
@@ -37,7 +42,23 @@ describe("CLI creation and read commands", () => {
     expect(created.code).toBe(0);
     expect(created.stdout).toMatch(/^sp-[0-9a-f]{6}\n$/);
     expect(data[0]).toMatchObject({ kind: "spec", status: "draft", title: "Plan notifications", tags: ["orders", "planning"] });
-    expect((await run(repo, ["show", data[0].id])).stdout).toContain("## Implementation Decisions");
+    const body = (await run(repo, ["show", data[0].id])).stdout;
+    expect(body).toContain("## Implementation Decisions");
+    expect(body).toContain("## Related Work");
+    expect(body).not.toContain("## User Stories");
+    expect(body).not.toContain("## Slicing Notes");
+  });
+
+  test("new story creates a business-facing body template", async () => {
+    const repo = await tempRepo();
+
+    const created = await run(repo, ["new", "story", "--statement", "Agents preserve planning context"]);
+    const body = (await run(repo, ["show", created.stdout.trim()])).stdout;
+
+    expect(body).toContain("## Context");
+    expect(body).toContain("## Acceptance Criteria");
+    expect(body).toContain("- [ ]");
+    expect(body).toContain("## Notes");
   });
 
   test("show resolves bare suffixes and reports ambiguous suffixes", async () => {
