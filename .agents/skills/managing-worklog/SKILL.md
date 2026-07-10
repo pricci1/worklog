@@ -1,21 +1,28 @@
 ---
 name: managing-worklog
-description: Manages Specs, User Stories, and Tracer Slices stored under .work/ via the wl CLI. Use when planning, inspecting, picking up, updating, linking, syncing, or validating work items in a repository that uses wl. Never hand-edit frontmatter — use wl commands so key order and body are preserved.
+description: Worklog planning and tracking via wl for Specs, User Stories, and Tracer Slices under .work/. Use when planning, inspecting, picking up, updating, linking, syncing, or validating work items in a repository that uses wl. Route frontmatter changes through wl so key order and Markdown bodies are preserved.
 ---
 
 # Managing Worklog
 
 This repo tracks work as Markdown files with YAML frontmatter under `.work/`, managed by the `wl` CLI.
 
-Three kinds of items exist:
+Three leading words define the worklog:
 
-- **Spec** (`sp-xxxxxx`): context container for intent, scope, decisions, and open questions. Not executable work.
-- **Story** (`us-xxxxxx`): business-facing intent. No implementation details.
-- **Slice** (`sl-xxxxxx`): a tracer bullet of work. Covers at least one story and may depend on other slices.
+- **Spec** (`sp-xxxxxx`): context container for intent, scope, decisions, and open questions.
+- **Story** (`us-xxxxxx`): business-facing, observable outcome.
+- **Tracer slice** (`sl-xxxxxx`): narrow, executable path through the system.
 
-The hierarchy is `spec <- story <- slice`: stories may reference one spec, slices cover stories, and slices do not cover specs directly. Specs hold context, stories hold desired outcomes, and slices define the executable frontier for implementation agents.
+The hierarchy is `spec <- story <- slice`: each story may reference one spec; each slice covers at least one story and may depend on other slices. Specs hold context, stories hold desired outcomes, and slices define the executable frontier for implementation agents.
 
-The frontmatter is the source of truth for querying. Mutate it only through `wl` commands. Markdown bodies may be edited directly after an item is created.
+## Operating invariants
+
+- Create every item with `wl new` and consume the ID printed to stdout.
+- Treat frontmatter as the query source of truth and route its mutations through `wl`. Edit Markdown bodies directly after creation.
+- Keep implementation detail in slices; keep stories focused on business outcomes.
+- Treat `ready` and `blocked` as values computed from slice status and dependencies.
+- Let `wl sync` manage issue fields and gitignored sync overlays.
+- Complete every `.work/` change by resolving `wl lint` errors and rerunning it successfully.
 
 Consult [`WL_CLI_REFERENCE.md`](WL_CLI_REFERENCE.md) when command syntax is uncertain, when answering a structural query without a built-in command, when syncing GitHub Issues, or when diagnosing lint and scripting behavior.
 
@@ -33,6 +40,8 @@ wl ready
 wl blocked
 ```
 
+Inspection is complete when the output answers the question and, for a specific item, its linked context has been reviewed.
+
 ## Picking up work
 
 When asked "what should I work on?", filter ready slices by mode:
@@ -42,7 +51,7 @@ wl ready --mode AFK --json
 wl ready --mode HITL --json
 ```
 
-Show a candidate's full context before starting, then mark progress through the CLI:
+Read a candidate's full context and mark it doing before implementation. Mark it done only after its verification succeeds:
 
 ```sh
 wl context <slice-id>
@@ -51,49 +60,48 @@ wl status <slice-id> doing
 wl status <slice-id> done
 ```
 
+A recommendation is complete when the candidate is ready for the requested mode and its context has been reviewed and presented. A pickup is complete when the chosen slice is marked `doing`.
+
 ## Synthesize a spec and stories
 
-When asked to turn a conversation, plan, or rough idea into tracked work, synthesize from the context already available. Ask the user only when a missing decision would materially change scope, story boundaries, or safety.
+When asked to turn a conversation, plan, or rough idea into tracked work, synthesize from the available context. Ask the user only when a missing decision would materially change scope, story boundaries, or safety.
 
-1. Explore enough code and documentation to understand current vocabulary, existing seams, and prior work.
-2. Read the spec and story shapes in [`WORK_ITEM_TEMPLATES.md`](WORK_ITEM_TEMPLATES.md), then draft a spec covering the problem, solution, scope, decisions, testing, open questions, and related work.
-3. Draft business-facing stories at the same time. Keep them as separate `us-*` items linked to the spec rather than reproducing full stories in the spec body.
-4. Before publishing many items, show the proposed spec title and numbered story statements. Ask whether the story set is right.
-5. After approval, create the spec and stories and link every story to the spec.
+1. Explore code, documentation, and prior work until you can name the current vocabulary, relevant seams, and constraints needed by the draft.
+2. Read the spec and story shapes in [`WORK_ITEM_TEMPLATES.md`](WORK_ITEM_TEMPLATES.md). Complete every applicable heading; explicitly record `None` where a heading has no content.
+3. Draft separate business-facing stories linked to the spec. The story set is complete when every in-scope business outcome is represented and every acceptance criterion is observable.
+4. Before publishing many items, show the proposed spec title and numbered story statements. Continue revising until the user approves the story set.
+5. Create the approved spec and stories, link every story to the spec, and inspect `wl context <spec-id>` to account for every created story.
 
 ```sh
 spec_id=$(wl new spec --title "Improve planning workflows" --tags planning,agents)
 story_id=$(wl new story --statement "Agents can turn a rough idea into tracked work without losing context" --tags planning,agents)
 wl link "$story_id" --spec "$spec_id"
+wl context "$spec_id"
 ```
 
-Approve the spec only after the user agrees it is ready to guide slicing:
+After the user agrees the spec is ready to guide slicing, approve it:
 
 ```sh
 wl status <spec-id> approved
 ```
 
+Synthesis is complete when the context shows every approved story linked to the spec, the spec status reflects the user's approval, and `wl lint` succeeds.
+
 ## Turn stories into tracer slices
 
-Slicing is generally separate from spec and story creation. Each tracer slice should deliver a narrow, complete, independently verifiable path through the system. Prefer a small prefactor slice first when it makes later work easier.
+Slicing is generally separate from spec and story creation. Each tracer slice delivers a narrow, complete, independently verifiable path through the system. Prefer a small prefactor slice first when it makes later work easier.
 
-1. Read the relevant context:
-
-   ```sh
-   wl context <spec-or-story-id>
-   ```
-
+1. Run `wl context <spec-or-story-id>`. Context review is complete when the selected stories, their spec, and existing covering slices are accounted for.
 2. Draft slices before creating them. For each proposed slice, show:
-
    - **Title**: short implementation-facing name.
    - **Covers**: linked story IDs.
    - **Blocked by**: slice titles or IDs that genuinely gate it, or none.
    - **Mode**: `AFK` if an agent can complete it autonomously; `HITL` if it needs human input, review, approval, or a decision.
-   - **What it delivers**: end-to-end behavior, not a layer-by-layer task list.
-
-3. Ask whether the granularity, dependency edges, and modes are right. Do not create a batch until the breakdown is approved.
-4. Create approved slices in dependency order so blockers already have IDs.
-5. Read the slice shape in [`WORK_ITEM_TEMPLATES.md`](WORK_ITEM_TEMPLATES.md), then fill each body with enough context for a fresh agent to implement it in one context window.
+   - **What it delivers**: end-to-end behavior rather than a layer-by-layer task list.
+3. Check the draft set: every selected story outcome is covered, every slice has an observable verification path, and every dependency is a genuine execution gate.
+4. Show the draft set and continue revising until the user approves its granularity, dependency edges, and modes.
+5. Create slices in dependency order. Read the slice shape in [`WORK_ITEM_TEMPLATES.md`](WORK_ITEM_TEMPLATES.md) and complete every applicable heading, recording `None` where needed.
+6. Inspect `wl context <spec-or-story-id>` and account for every approved slice and relationship.
 
 ```sh
 wl new slice \
@@ -104,11 +112,13 @@ wl new slice \
   --tags orders,telegram
 ```
 
+Slicing is complete when every approved slice and relationship appears in context and `wl lint` succeeds.
+
 For wide mechanical refactors that cannot land as vertical slices, use expand-contract sequencing: add the new form beside the old, migrate bounded batches while keeping the repo green, then remove the old form after all callers move.
 
 ## Updating work
 
-Always route frontmatter changes through commands:
+Route frontmatter changes through the matching command:
 
 ```sh
 wl status <id> <value>
@@ -121,18 +131,4 @@ wl unlink <slice-id> --covers <us-id>
 wl unlink <slice-id> --depends-on <sl-id>
 ```
 
-`ready` and `blocked` are computed from status and dependencies; never set them in a file. Use [`WL_CLI_REFERENCE.md`](WL_CLI_REFERENCE.md) for status values, mode semantics, query examples, and sync behavior.
-
-## Validating changes
-
-Run `wl lint` before any commit that touches `.work/`. Fix the cause of every error and rerun until it exits successfully. The full checks and exit-code conventions are in [`WL_CLI_REFERENCE.md`](WL_CLI_REFERENCE.md).
-
-## What not to do
-
-- Do not hand-edit YAML frontmatter; use `wl` commands.
-- Do not treat specs as executable work; use slices.
-- Do not put implementation details in stories; put them in covering slices.
-- Do not invent IDs or create item files directly; use `wl new` and consume its printed ID.
-- Do not set computed `ready` or `blocked` values.
-- Do not commit sync overlays or hand-edit the `issue` field; let `wl sync` manage them.
-- Do not bypass `wl lint` failures; fix their cause.
+Use [`WL_CLI_REFERENCE.md`](WL_CLI_REFERENCE.md) for status values, mode semantics, query examples, and sync behavior. An update is complete when `wl show` or `wl context` confirms the requested state and `wl lint` succeeds.
