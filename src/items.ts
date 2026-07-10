@@ -82,8 +82,6 @@ export async function loadItemsWithIssues(workDir: string): Promise<{ items: Loa
       if (parsed.item.spec) {
         if (byId.get(parsed.item.spec)?.kind !== "spec") issues.push({ file: parsed.path, id: parsed.item.id, problem: `spec missing ${parsed.item.spec}` });
         storyCountBySpec.set(parsed.item.spec, (storyCountBySpec.get(parsed.item.spec) ?? 0) + 1);
-      } else if (parsed.item.status === "active") {
-        issues.push({ file: parsed.path, id: parsed.item.id, problem: "active story has no spec", warning: true });
       }
       continue;
     }

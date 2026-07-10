@@ -15,6 +15,15 @@ describe("item loading", () => {
     expect(items[2]).toMatchObject({ kind: "slice", ready: true, blocked: false });
   });
 
+  test("allows active stories without specs", async () => {
+    const repo = await tempRepo();
+    await put(repo, "us-a11111-story.md", story());
+
+    const { issues } = await loadItemsWithIssues(`${repo}/.work`);
+
+    expect(issues).toEqual([]);
+  });
+
   test("validates story spec references and spec lifecycle warnings", async () => {
     const repo = await tempRepo();
     await put(repo, "sp-d44444-spec.md", spec().replace("status: draft", "status: archived"));
