@@ -64,57 +64,11 @@ A recommendation is complete when the candidate is ready for the requested mode 
 
 ## Synthesize a spec and stories
 
-When asked to turn a conversation, plan, or rough idea into tracked work, synthesize from the available context. Ask the user only when a missing decision would materially change scope, story boundaries, or safety.
-
-1. Explore code, documentation, and prior work until you can name the current vocabulary, relevant seams, and constraints needed by the draft.
-2. Read the spec and story shapes in [`WORK_ITEM_TEMPLATES.md`](WORK_ITEM_TEMPLATES.md). Complete every applicable heading; explicitly record `None` where a heading has no content.
-3. Draft separate business-facing stories linked to the spec. The story set is complete when every in-scope business outcome is represented and every acceptance criterion is observable.
-4. Before publishing many items, show the proposed spec title and numbered story statements. Continue revising until the user approves the story set.
-5. Create the approved spec and stories, link every story to the spec, and inspect `wl context <spec-id>` to account for every created story.
-
-```sh
-spec_id=$(wl new spec --title "Improve planning workflows" --tags planning,agents)
-story_id=$(wl new story --statement "Agents can turn a rough idea into tracked work without losing context" --tags planning,agents)
-wl link "$story_id" --spec "$spec_id"
-wl context "$spec_id"
-```
-
-After the user agrees the spec is ready to guide slicing, approve it:
-
-```sh
-wl status <spec-id> approved
-```
-
-Synthesis is complete when the context shows every approved story linked to the spec, the spec status reflects the user's approval, and `wl lint` succeeds.
+When turning a conversation, plan, or rough idea into tracked work, read and follow [`SYNTHESIZE_SPEC_AND_STORIES.md`](SYNTHESIZE_SPEC_AND_STORIES.md) before creating any items.
 
 ## Turn stories into tracer slices
 
-Slicing is generally separate from spec and story creation. Each tracer slice delivers a narrow, complete, independently verifiable path through the system. Prefer a small prefactor slice first when it makes later work easier.
-
-1. Run `wl context <spec-or-story-id>`. Context review is complete when the selected stories, their spec, and existing covering slices are accounted for.
-2. Draft slices before creating them. For each proposed slice, show:
-   - **Title**: short implementation-facing name.
-   - **Covers**: linked story IDs.
-   - **Blocked by**: slice titles or IDs that genuinely gate it, or none.
-   - **Mode**: `AFK` if an agent can complete it autonomously; `HITL` if it needs human input, review, approval, or a decision.
-   - **What it delivers**: end-to-end behavior rather than a layer-by-layer task list.
-3. Check the draft set: every selected story outcome is covered, every slice has an observable verification path, and every dependency is a genuine execution gate.
-4. Show the draft set and continue revising until the user approves its granularity, dependency edges, and modes.
-5. Create slices in dependency order. Read the slice shape in [`WORK_ITEM_TEMPLATES.md`](WORK_ITEM_TEMPLATES.md) and complete every applicable heading, recording `None` where needed.
-6. Inspect `wl context <spec-or-story-id>` and account for every approved slice and relationship.
-
-```sh
-wl new slice \
-  --title "Telegram notification on new order" \
-  --mode AFK \
-  --covers us-a3f2b1 \
-  --depends-on sl-9d4e7c \
-  --tags orders,telegram
-```
-
-Slicing is complete when every approved slice and relationship appears in context and `wl lint` succeeds.
-
-For wide mechanical refactors that cannot land as vertical slices, use expand-contract sequencing: add the new form beside the old, migrate bounded batches while keeping the repo green, then remove the old form after all callers move.
+When breaking a spec or story into executable work, read and follow [`TRACER_SLICING.md`](TRACER_SLICING.md) before creating any slices.
 
 ## Updating work
 
