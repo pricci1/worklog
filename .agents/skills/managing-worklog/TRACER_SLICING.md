@@ -11,8 +11,34 @@ Follow this branch when breaking a spec or story into executable work. Slicing i
    - **What it delivers**: end-to-end behavior rather than a layer-by-layer task list.
 3. Check the draft set: every selected story outcome is covered, every slice has an observable verification path, and every dependency is a genuine execution gate.
 4. Show the draft set and continue revising until the user approves its granularity, dependency edges, and modes.
-5. Create slices in dependency order. Read the slice shape in [`WORK_ITEM_TEMPLATES.md`](WORK_ITEM_TEMPLATES.md) and complete every applicable heading, recording `None` where needed.
+5. Create slices in dependency order. Use the slice body shape below and complete every applicable heading, recording `None` where needed.
 6. Inspect `wl context <spec-or-story-id>` and account for every approved slice and relationship.
+
+## Slice body shape
+
+```md
+# <title>
+
+## What to build
+
+End-to-end behavior this slice makes work.
+
+## Acceptance Criteria
+
+- [ ] Observable outcome.
+
+## Implementation Notes
+
+Only decisions, constraints, or known seams useful to the implementing agent.
+
+## Verification
+
+- [ ] Command or manual check that proves the slice works.
+
+## Out of Scope
+```
+
+## Creation
 
 ```sh
 wl new slice \
