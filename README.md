@@ -1,4 +1,16 @@
-wl 0.1.0 — Git-native CLI for Specs (sp-…), User Stories (us-…), and Tracer Slices (sl-…).
+# wl
+
+Git-native CLI for Specs (sp-…), User Stories (us-…), and Tracer Slices (sl-…).
+
+## Install
+
+`wl` runs on [Bun](https://bun.sh/):
+
+```sh
+bun add --global @pricci1/wl
+```
+
+## Usage
 
 USAGE
   wl <command> [options]
@@ -40,3 +52,16 @@ ITEM KINDS
 
 Work items live in .work/ as Markdown with YAML frontmatter.
 Run `wl <command> --help` for command-specific usage.
+
+## Releasing
+
+The GitHub Actions release workflow uses Bun to test and pack the package, then publishes it through npm trusted publishing. Tags must match the version in `package.json` (for example, package version `0.1.0` is released by tag `v0.1.0`).
+
+Configure the trusted publisher for `@pricci1/wl` on npm with GitHub owner `pricci1`, repository `worklog`, workflow `release.yml`, and the `npm publish` permission. No npm token is required. The package must exist on npm before its trusted publisher can be configured, so publish the first version manually if necessary.
+
+To release, bump the version and push its generated commit and tag:
+
+```sh
+bun pm version patch
+git push --follow-tags
+```

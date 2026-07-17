@@ -1,16 +1,35 @@
 {
-  "name": "wl",
+  "name": "@pricci1/wl",
   "version": "0.1.0",
-  "module": "index.ts",
+  "description": "Git-native CLI for Specs, User Stories, and Tracer Slices.",
+  "homepage": "https://github.com/pricci1/worklog#readme",
+  "bugs": {
+    "url": "https://github.com/pricci1/worklog/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pricci1/worklog.git"
+  },
   "type": "module",
-  "private": true,
   "bin": {
     "wl": "./index.ts"
   },
-  "devDependencies": {
-    "@types/bun": "latest"
+  "files": [
+    "index.ts",
+    "src"
+  ],
+  "engines": {
+    "bun": ">=1.3.0"
   },
-  "peerDependencies": {
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
     "typescript": "^5"
   },
   "dependencies": {
