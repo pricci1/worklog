@@ -1,6 +1,6 @@
 {
   "name": "@pricci1/wl",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Git-native CLI for Specs, User Stories, and Tracer Slices.",
   "homepage": "https://github.com/pricci1/worklog#readme",
   "bugs": {
