@@ -2,7 +2,7 @@
 name: managing-worklog
 description: Worklog planning and tracking via wl for Specs, User Stories, and Tracer Slices under .work/. Use when planning, inspecting, picking up, updating, linking, syncing, or validating work items in a repository that uses wl. Route frontmatter changes through wl so key order and Markdown bodies are preserved.
 metadata:
-  version: 0.1.2
+  version: 0.1.3
 ---
 
 # Managing Worklog
