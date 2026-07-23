@@ -7,6 +7,8 @@ description: Worklog planning and tracking via wl for Specs, User Stories, and T
 
 This repo tracks work as Markdown files with YAML frontmatter under `.work/`, managed by the `wl` CLI.
 
+If not already installed, you can use `bunx` or `npx` with package `@pricci1/worklog`.
+
 Three leading words define the worklog:
 
 - **Spec** (`sp-xxxxxx`): context container for intent, scope, decisions, and open questions.
