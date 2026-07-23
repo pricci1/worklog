@@ -9,7 +9,7 @@ metadata:
 
 This repo tracks work as Markdown files with YAML frontmatter under `.work/`, managed by the `wl` CLI.
 
-If not already installed, you can use `bunx` or `npx` with package `@pricci1/worklog`.
+If not already installed, you can use `bunx` or `npx` with package `@pricci1/wl`.
 
 Three leading words define the worklog:
 
